@@ -80,12 +80,12 @@ def pipelined_iteration(model, inputs, targets, loss_fn):
     return sequential_backward(inputs, outputs, targets, loss_fn)
 
 
-def fb_forward(model_part, inputs, global_inputs, targets, loss_fn):
+def fb_forward(model_part, microbatches, microtargets, loss_fn):
     
     rank = dist.get_rank()
     world_size = dist.get_world_size()
     
-    for inputs in global_inputs:
+    for inputs, targets in zip(microbatches, microtargets):
         if rank != 0:
             # Receive inputs from the previous rank
             inputs = torch.zeros_like(inputs, requires_grad=True)
@@ -105,18 +105,58 @@ def fb_forward(model_part, inputs, global_inputs, targets, loss_fn):
             
             loss = loss_fn(outputs, targets)
             loss.backward()
+            
+            dist.send(inputs.grad, dst=rank - 1)
+            
+            print(f"Rank {rank} loss: {loss.item()}")
     
     
-    for _ in global_inputs:
-        if world_size != world_size - 1:
+    for i, _ in enumerate(microbatches):
+        if i <= rank < world_size - 1:
             # Receive gradients from the next rank and backward
             grad_outputs = torch.zeros_like(outputs, requires_grad=True)
             dist.recv(grad_outputs, src=rank + 1)
             outputs.backward(grad_outputs)
 
-        if rank != 0:
+        if i < rank < world_size - 1:
             # Send gradients to the previous rank
             dist.send(inputs.grad, dst=rank - 1)
+    
+    
+    
+    # Interleaving forward and backward passes
+    for i, (inputs, targets) in enumerate(zip(microbatches, microtargets)):
+        if rank != 0:
+            # Receive inputs from the previous rank
+            inputs = torch.zeros_like(inputs, requires_grad=True)
+            inputs.retain_grad()
+            dist.recv(inputs, src=rank - 1)
+        
+        if rank != world_size - 1 :
+            grad_outputs = torch.zeros_like(outputs, requires_grad=True)
+            dist.recv(grad_outputs, src=rank + 1)
+            outputs.backward(grad_outputs)
+            
+            
+            outputs = model_part(inputs)
+            # Send outputs to the next rank
+            dist.send(outputs, dst=rank + 1)
+        
+        if rank != 0:
+            if i != 0 & rank != world_size - 1:
+                # Send gradients to the previous rank
+                dist.send(inputs.grad, dst=rank - 1)
+        
+        if rank == world_size - 1 :
+            # Compute loss and backward
+            outputs = model_part(inputs)
+            
+            loss = loss_fn(outputs, targets)
+            loss.backward()
+            
+            dist.send(inputs.grad, dst=rank - 1)
+            
+            print(f"Rank {rank} loss: {loss.item()}")
     
     
     return inputs, targets, loss_fn
