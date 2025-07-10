@@ -154,9 +154,20 @@ def fb_forward(model_part, microbatches, microtargets, loss_fn):
             loss = loss_fn(outputs, targets)
             loss.backward()
             
-            dist.send(inputs.grad, dst=rank - 1)
-            
             print(f"Rank {rank} loss: {loss.item()}")
+    
+    
+    for i, _ in enumerate(microbatches):
+        if 0 <= rank < world_size - 1 - i:
+            # Receive gradients from the next rank and backward
+            grad_outputs = torch.zeros_like(outputs, requires_grad=True)
+            dist.recv(grad_outputs, src=rank + 1)
+            outputs.backward(grad_outputs)
+
+        if 0 < rank <= world_size - 1 - i:
+            # Send gradients to the previous rank
+            dist.send(inputs.grad, dst=rank - 1)
+    
     
     
     return inputs, targets, loss_fn
