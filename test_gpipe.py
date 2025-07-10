@@ -2,7 +2,8 @@ import copy
 import torch
 import torch.nn as nn
 import torch.distributed as dist
-from src.utils import pipelined_iteration, sequential_backward, sequential_forward
+from src.utils import sequential_backward, sequential_forward
+from gpipe import pipelined_iteration_gpipe
 
 def sync_parameters(model):
     with torch.no_grad():
@@ -80,7 +81,7 @@ def test_pipelined_iteration(full_model, local_model):
         full_loss = loss_fn(full_output, targets)
         full_loss.backward()
 
-    total_loss = pipelined_iteration(local_model, inputs, targets, loss_fn)
+    total_loss = pipelined_iteration_gpipe(local_model, inputs, targets, loss_fn)
 
     params = {name: param.grad for name, param in local_model.named_parameters()}
     gather_list = [None for _ in range(world_size)] if rank == world_size - 1 else None
