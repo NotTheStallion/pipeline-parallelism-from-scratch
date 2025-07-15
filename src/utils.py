@@ -85,7 +85,7 @@ def fb_forward(model_part, microbatches, microtargets, loss_fn):
     rank = dist.get_rank()
     world_size = dist.get_world_size()
     
-    for inputs, targets in zip(microbatches, microtargets):
+    for i, (inputs, targets) in enumerate(zip(microbatches, microtargets)):
         if rank != 0:
             # Receive inputs from the previous rank
             inputs = torch.zeros_like(inputs, requires_grad=True)
@@ -93,6 +93,7 @@ def fb_forward(model_part, microbatches, microtargets, loss_fn):
             dist.recv(inputs, src=rank - 1)
         
         if rank != world_size - 1:
+            print(f"Forward pass rank {rank} batch {i}")
             outputs = model_part(inputs)
 
         if rank != world_size - 1:
@@ -100,6 +101,8 @@ def fb_forward(model_part, microbatches, microtargets, loss_fn):
             dist.send(outputs, dst=rank + 1)
         
         if rank == world_size - 1:
+            print(f"F/Backward pass rank {rank} batch {i}")
+            
             # Compute loss and backward
             outputs = model_part(inputs)
             
@@ -110,19 +113,25 @@ def fb_forward(model_part, microbatches, microtargets, loss_fn):
             
             print(f"Rank {rank} loss: {loss.item()}")
     
+    print("=============")
+    if rank == 0:
+        print("Yellow triangle")
     
     for i, _ in enumerate(microbatches):
         if i <= rank < world_size - 1:
+            print("=")
             # Receive gradients from the next rank and backward
             grad_outputs = torch.zeros_like(outputs, requires_grad=True)
             dist.recv(grad_outputs, src=rank + 1)
             outputs.backward(grad_outputs)
 
         if i < rank < world_size - 1:
+            print("==")
             # Send gradients to the previous rank
             dist.send(inputs.grad, dst=rank - 1)
     
-    
+    if rank == 0:
+        print("Trapezoid")
     
     # Interleaving forward and backward passes
     for i, (inputs, targets) in enumerate(zip(microbatches, microtargets)):
@@ -156,6 +165,8 @@ def fb_forward(model_part, microbatches, microtargets, loss_fn):
             
             print(f"Rank {rank} loss: {loss.item()}")
     
+    if rank == 0:
+        print("Black triangle")
     
     for i, _ in enumerate(microbatches):
         if 0 <= rank < world_size - 1 - i:
