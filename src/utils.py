@@ -85,53 +85,75 @@ def fb_forward(model_part, microbatches, microtargets, loss_fn):
     rank = dist.get_rank()
     world_size = dist.get_world_size()
     
+    micrograds = [0] * world_size * 2
+    microoutputs = [0] * world_size * 2
+    
     for i, (inputs, targets) in enumerate(zip(microbatches, microtargets)):
         if rank != 0:
             # Receive inputs from the previous rank
-            inputs = torch.zeros_like(inputs, requires_grad=True)
+            inputs.requires_grad_(True)
             inputs.retain_grad()
+            print(f"\033[94mReceive inputs {i} rank {rank} <- {rank - 1}\033[0m")
             dist.recv(inputs, src=rank - 1)
         
         if rank != world_size - 1:
-            print(f"Forward pass rank {rank} batch {i}")
             outputs = model_part(inputs)
+            microoutputs[i] = outputs
 
         if rank != world_size - 1:
             # Send outputs to the next rank
+            print(f"\033[94mSend outputs {i} rank {rank} -> {rank + 1}\033[0m")
             dist.send(outputs, dst=rank + 1)
         
         if rank == world_size - 1:
-            print(f"F/Backward pass rank {rank} batch {i}")
+            # print(f"F/Backward pass rank {rank} batch {i}")
             
             # Compute loss and backward
             outputs = model_part(inputs)
+            microoutputs[i] = outputs
             
             loss = loss_fn(outputs, targets)
             loss.backward()
             
-            dist.send(inputs.grad, dst=rank - 1)
-            
+            if i != world_size - 1:
+                # Send gradients to the previous rank
+                print(f"\033[91mSend inputs.grad {i} rank {rank} -> {rank - 1}\033[0m")
+                dist.send(inputs.grad, dst=rank - 1)
             print(f"Rank {rank} loss: {loss.item()}")
-    
-    print("=============")
-    if rank == 0:
-        print("Yellow triangle")
-    
-    for i, _ in enumerate(microbatches):
-        if i <= rank < world_size - 1:
-            print("=")
+        
+        if rank == world_size - 2 and i != world_size - 1:
             # Receive gradients from the next rank and backward
-            grad_outputs = torch.zeros_like(outputs, requires_grad=True)
+            grad_outputs = torch.zeros_like(microoutputs[i], requires_grad=True)
+            micrograds[i] = grad_outputs
+            
+            print(f"\033[94;1mReceive grad_outputs {i} rank {rank} <- {rank + 1}\033[0m")
             dist.recv(grad_outputs, src=rank + 1)
-            outputs.backward(grad_outputs)
-
-        if i < rank < world_size - 1:
-            print("==")
-            # Send gradients to the previous rank
-            dist.send(inputs.grad, dst=rank - 1)
+            
+            microoutputs[i].backward(grad_outputs)
+    
     
     if rank == 0:
-        print("Trapezoid")
+        # import pdb; pdb.set_trace()
+        print("=========== Yellow triangle")
+    
+    for i, inputs in enumerate(microbatches):
+        if i != world_size - 2:
+            if i <= rank < world_size - 2:
+                # Receive gradients from the next rank and backward
+                grad_outputs = torch.zeros_like(microoutputs[i], requires_grad=True)
+                micrograds[i] = grad_outputs
+                
+                print(f"\033[93m+ Recv {i} rank {rank} <- {rank + 1}\033[0m")
+                dist.recv(grad_outputs, src=rank + 1)
+                microoutputs[i].backward(grad_outputs)
+
+            if i < rank < world_size - 1:
+                # Send gradients to the previous rank
+                print(f"\033[93m+ Send {i} rank {rank} -> {rank - 1}\033[0m")
+                dist.send(inputs.grad, dst=rank - 1)
+    
+    if rank == 0:
+        print("========== Trapezoid")
     
     # Interleaving forward and backward passes
     for i, (inputs, targets) in enumerate(zip(microbatches, microtargets)):
@@ -139,22 +161,29 @@ def fb_forward(model_part, microbatches, microtargets, loss_fn):
             # Receive inputs from the previous rank
             inputs = torch.zeros_like(inputs, requires_grad=True)
             inputs.retain_grad()
+            print(f"Receive inputs {i+4} rank {rank} <- {rank - 1}")
             dist.recv(inputs, src=rank - 1)
         
+        
         if rank != world_size - 1 :
+            tmp_outputs = model_part(inputs)
+            # Send outputs to the next rank
+            print(f"Send outputs {i+4} rank {rank} -> {rank + 1}")
+            dist.send(tmp_outputs, dst=rank + 1)
+        
+
             grad_outputs = torch.zeros_like(outputs, requires_grad=True)
+            print(f"Receive grad_outputs {i+4} rank {rank} <- {rank + 1}")
             dist.recv(grad_outputs, src=rank + 1)
             outputs.backward(grad_outputs)
             
-            
-            outputs = model_part(inputs)
-            # Send outputs to the next rank
-            dist.send(outputs, dst=rank + 1)
+            outputs = tmp_outputs
         
         if rank != 0:
-            if i != 0 & rank != world_size - 1:
-                # Send gradients to the previous rank
-                dist.send(inputs.grad, dst=rank - 1)
+            # Send gradients to the previous rank
+            print(f"Send inputs.grad {i+4} rank {rank} -> {rank - 1}")
+            dist.send(inputs.grad, dst=rank - 1)
+        
         
         if rank == world_size - 1 :
             # Compute loss and backward
