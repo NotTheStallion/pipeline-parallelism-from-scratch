@@ -27,8 +27,9 @@ def pipelined_iteration_1f1b(model_part, inputs, targets, loss_fn, chunck_num=2)
     global_grads = []
     
     # Forward & Backward pass for all microbatches
-    if rank == 0:
-        print(len(microbatches), len(microtargets))
+    # if rank == 0:
+    #     print(chunck_num, world_size)
+    #     print(len(microbatches), len(microtargets))
     total_loss = fb_forward(model_part, microbatches, microtargets, loss_fn, chunck_num)
 
     return total_loss
@@ -36,7 +37,7 @@ def pipelined_iteration_1f1b(model_part, inputs, targets, loss_fn, chunck_num=2)
 
 
 
-def pipelined_training_1f1b(model_part):
+def pipelined_training_1f1b(model_part, chunck_num=2):
     """
     Perform pipelined training on a full dataset
     For each batch:
@@ -49,7 +50,6 @@ def pipelined_training_1f1b(model_part):
     dataset = MyDataset()
     loss_fn = nn.MSELoss()
     optimizer = torch.optim.Adam(model_part.parameters())
-    chunck_num = 3 # @param 
     batch_size = world_size * chunck_num
     data_loader = torch.utils.data.DataLoader(dataset, batch_size=batch_size, shuffle=True)
 
@@ -91,15 +91,16 @@ if __name__ == "__main__":
     local_model = model[rank * layers_per_rank : (rank + 1) * layers_per_rank]
     print(f"Rank {rank} model: {local_model}")
     
+    chunck_num = 4 # @param 
     inputs = torch.randn(256, 32) # inputs to the full model
     targets = torch.randn(256, 32) # targets
     
-    inputs, outputs = sequential_forward(local_model, inputs)
+    # inputs, outputs = sequential_forward(local_model, inputs)
     
-    sequential_backward(inputs, outputs, targets, nn.MSELoss())
+    # sequential_backward(inputs, outputs, targets, nn.MSELoss())
     
-    pipelined_iteration_1f1b(local_model, inputs, targets, nn.MSELoss())
+    # pipelined_iteration_1f1b(local_model, inputs, targets, nn.MSELoss(), chunck_num)
     
-    pipelined_training_1f1b(local_model)
+    pipelined_training_1f1b(local_model, chunck_num)
     
     dist.destroy_process_group()

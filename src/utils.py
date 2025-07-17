@@ -169,9 +169,11 @@ def fb_forward(model_part, microbatches, microtargets, loss_fn, chunk_num=2):
     
     # Interleaving forward and backward passes
     for i in range(world_size, world_size * chunk_num):
-        if rank == 0:
-            print(f"Trapezoid loop with batch {i}")
-    
+        # if rank == 0:
+        #     print(f"Trapezoid loop with batch {i}")
+        if i > len(microbatches) - 1:
+            break
+        
         if rank != 0:
             # Receive inputs from the previous rank
             microbatches[i].requires_grad_(True)
