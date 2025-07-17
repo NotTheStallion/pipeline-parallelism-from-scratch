@@ -9,7 +9,7 @@ from src.utils import sequential_forward, sequential_backward, fb_forward
 
 
 
-def pipelined_iteration_1f1b(model_part, inputs, targets, loss_fn):
+def pipelined_iteration_1f1b(model_part, inputs, targets, loss_fn, chunck_num=2):
     """
     Implement one iteration of pipelined training using GPipe
     - Split the inputs and targets into microbatches
@@ -18,7 +18,6 @@ def pipelined_iteration_1f1b(model_part, inputs, targets, loss_fn):
     """
     rank = dist.get_rank()
     world_size = dist.get_world_size()
-    chunck_num = 2 # @param 
     microbatches = torch.chunk(inputs, world_size * chunck_num)
     microtargets = torch.chunk(targets, world_size * chunck_num)
     
@@ -28,6 +27,8 @@ def pipelined_iteration_1f1b(model_part, inputs, targets, loss_fn):
     global_grads = []
     
     # Forward & Backward pass for all microbatches
+    if rank == 0:
+        print(len(microbatches), len(microtargets))
     total_loss = fb_forward(model_part, microbatches, microtargets, loss_fn, chunck_num)
 
     return total_loss
@@ -48,14 +49,15 @@ def pipelined_training_1f1b(model_part):
     dataset = MyDataset()
     loss_fn = nn.MSELoss()
     optimizer = torch.optim.Adam(model_part.parameters())
-    batch_size = 8
+    chunck_num = 3 # @param 
+    batch_size = world_size * chunck_num
     data_loader = torch.utils.data.DataLoader(dataset, batch_size=batch_size, shuffle=True)
 
     for epoch in range(10):
         epoch_loss = 0
         for inputs, targets in data_loader:
             optimizer.zero_grad()
-            loss = pipelined_iteration_1f1b(model_part, inputs, targets, loss_fn)
+            loss = pipelined_iteration_1f1b(model_part, inputs, targets, loss_fn, chunck_num)
             optimizer.step()
             if rank == world_size - 1:
                 epoch_loss += loss

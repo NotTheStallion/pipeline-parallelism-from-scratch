@@ -80,13 +80,13 @@ def pipelined_iteration(model, inputs, targets, loss_fn):
     return sequential_backward(inputs, outputs, targets, loss_fn)
 
 
-def fb_forward(model_part, microbatches, microtargets, loss_fn):
+def fb_forward(model_part, microbatches, microtargets, loss_fn, chunk_num=2):
     
     rank = dist.get_rank()
     world_size = dist.get_world_size()
     
-    micrograds = [0] * world_size * 2
-    microoutputs = [0] * world_size * 2
+    micrograds = [0] * world_size * chunk_num
+    microoutputs = [0] * world_size * chunk_num
     
     if rank == world_size - 1:
         # Last rank computes the loss and backward
@@ -168,8 +168,10 @@ def fb_forward(model_part, microbatches, microtargets, loss_fn):
     #     print("========== Trapezoid")
     
     # Interleaving forward and backward passes
-    for i in range(world_size, world_size * 2):
-        
+    for i in range(world_size, world_size * chunk_num):
+        if rank == 0:
+            print(f"Trapezoid loop with batch {i}")
+    
         if rank != 0:
             # Receive inputs from the previous rank
             microbatches[i].requires_grad_(True)
