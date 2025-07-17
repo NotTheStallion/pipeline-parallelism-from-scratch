@@ -87,20 +87,22 @@ def fb_forward(model_part, microbatches, microtargets, loss_fn):
     
     micrograds = [0] * world_size * 2
     microoutputs = [0] * world_size * 2
-    microbatches = microbatches * 2
-    microtargets = microtargets * 2
+    
+    if rank == world_size - 1:
+        # Last rank computes the loss and backward
+        total_loss = 0
     
     for i in range(world_size):
         if i >= world_size:
             break
-        
+
         if rank != 0:
             # Receive inputs from the previous rank
             microbatches[i].requires_grad_(True)
             microbatches[i].retain_grad()
             # print(f"\033[94mReceive inputs {i} rank {rank} <- {rank - 1}\033[0m")
             dist.recv(microbatches[i], src=rank - 1)
-        
+
         if rank != world_size - 1:
             outputs = model_part(microbatches[i])
             microoutputs[i] = outputs
@@ -109,22 +111,24 @@ def fb_forward(model_part, microbatches, microtargets, loss_fn):
             # Send outputs to the next rank
             # print(f"\033[94mSend outputs {i} rank {rank} -> {rank + 1}\033[0m")
             dist.send(outputs, dst=rank + 1)
-        
+
         if rank == world_size - 1:
             # print(f"F/Backward pass rank {rank} batch {i}")
-            
+
             # Compute loss and backward
             outputs = model_part(microbatches[i])
             microoutputs[i] = outputs
-            
+
             loss = loss_fn(outputs, microtargets[i])
             loss.backward()
-            
+
+            total_loss += loss.item()
+
             if i != world_size - 1:
                 # Send gradients to the previous rank
                 # print(f"\033[91mSend inputs.grad {i} rank {rank} -> {rank - 1}\033[0m")
                 dist.send(microbatches[i].grad, dst=rank - 1)
-            print(f"Rank {rank} loss: {loss.item()}")
+            # print(f"Rank {rank} loss: {loss.item()}")
         
         if rank == world_size - 2 and i != world_size - 1:
             # Receive gradients from the next rank and backward
@@ -137,9 +141,9 @@ def fb_forward(model_part, microbatches, microtargets, loss_fn):
             microoutputs[i].backward(grad_outputs)
     
     
-    if rank == 0:
-        # import pdb; pdb.set_trace()
-        print("=========== Yellow triangle")
+    # if rank == 0:
+    #     # import pdb; pdb.set_trace()
+    #     print("=========== Yellow triangle")
     
     for i, inputs in enumerate(microbatches):
         if i >= world_size:
@@ -160,8 +164,8 @@ def fb_forward(model_part, microbatches, microtargets, loss_fn):
                 # print(f"\033[93m+ Send {i} rank {rank} -> {rank - 1}\033[0m")
                 dist.send(inputs.grad, dst=rank - 1)
     
-    if rank == 0:
-        print("========== Trapezoid")
+    # if rank == 0:
+    #     print("========== Trapezoid")
     
     # Interleaving forward and backward passes
     for i in range(world_size, world_size * 2):
@@ -170,7 +174,7 @@ def fb_forward(model_part, microbatches, microtargets, loss_fn):
             # Receive inputs from the previous rank
             microbatches[i].requires_grad_(True)
             microbatches[i].retain_grad()
-            print(f"\033[93mReceive inputs {i} rank {rank} <- {rank - 1}\033[0m")
+            # print(f"\033[93mReceive inputs {i} rank {rank} <- {rank - 1}\033[0m")
             dist.recv(microbatches[i], src=rank - 1)
         
         
@@ -179,21 +183,21 @@ def fb_forward(model_part, microbatches, microtargets, loss_fn):
             microoutputs[i] = tmp_outputs
             
             # Send outputs to the next rank
-            print(f"\033[95mSend outputs {i} rank {rank} -> {rank + 1}\033[0m")
+            # print(f"\033[95mSend outputs {i} rank {rank} -> {rank + 1}\033[0m")
             dist.send(tmp_outputs, dst=rank + 1)
         
             k = i - ( world_size - rank ) + 1
 
             grad_outputs = torch.zeros_like(microoutputs[k], requires_grad=True)
             micrograds[k] = grad_outputs
-            print(f"\033[92mReceive grad_outputs {k} rank {rank} <- {rank + 1}\033[0m")
+            # print(f"\033[92mReceive grad_outputs {k} rank {rank} <- {rank + 1}\033[0m")
             dist.recv(grad_outputs, src=rank + 1)
             microoutputs[k].backward(grad_outputs)
         
         if rank != 0:
             # Send gradients to the previous rank
             k = i - ( world_size - rank )
-            print(f"\033[94mSend inputs.grad {k} rank {rank} -> {rank - 1}\033[0m")
+            # print(f"\033[94mSend inputs.grad {k} rank {rank} -> {rank - 1}\033[0m")
             dist.send(microbatches[k].grad, dst=rank - 1)
         
         
@@ -205,23 +209,26 @@ def fb_forward(model_part, microbatches, microtargets, loss_fn):
             loss = loss_fn(outputs, microtargets[i])
             loss.backward()
             
-            print(f"Rank {rank} loss: {loss.item()}")
+            total_loss += loss.item()
+            
+            # print(f"Rank {rank} loss: {loss.item()}")
     
-    if rank == 0:
-        print("Black triangle")
+    # if rank == 0:
+    #     print("Black triangle")
     
-    for i, _ in enumerate(microbatches):
-        if 0 <= rank < world_size - 1 - i:
+    for i in range(1,world_size+1):
+        if 0 <= rank < world_size - i:
             # Receive gradients from the next rank and backward
-            grad_outputs = torch.zeros_like(outputs, requires_grad=True)
+            grad_outputs = torch.zeros_like(microoutputs[-i], requires_grad=True)
+            # print(f"\033[91mReceive grad_outputs {len(microbatches)-i} rank {rank} <- {rank + 1}\033[0m")
             dist.recv(grad_outputs, src=rank + 1)
-            outputs.backward(grad_outputs)
+            microoutputs[-i].backward(grad_outputs)
 
-        if 0 < rank <= world_size - 1 - i:
+        if 0 < rank <= world_size - i:
             # Send gradients to the previous rank
-            dist.send(inputs.grad, dst=rank - 1)
+            # print(f"\033[91mSend inputs.grad {len(microbatches)-i} rank {rank} -> {rank - 1}\033[0m")
+            dist.send(microbatches[-i].grad, dst=rank - 1)
     
-    
-    
-    return inputs, targets, loss_fn
+    if rank == world_size - 1:
+        return total_loss
     

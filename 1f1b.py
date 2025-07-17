@@ -18,8 +18,9 @@ def pipelined_iteration_1f1b(model_part, inputs, targets, loss_fn):
     """
     rank = dist.get_rank()
     world_size = dist.get_world_size()
-    microbatches = torch.chunk(inputs, world_size)
-    microtargets = torch.chunk(targets, world_size)
+    chunck_num = 2 # @param 
+    microbatches = torch.chunk(inputs, world_size * chunck_num)
+    microtargets = torch.chunk(targets, world_size * chunck_num)
     
     total_loss = 0
     global_inputs = []
@@ -27,7 +28,7 @@ def pipelined_iteration_1f1b(model_part, inputs, targets, loss_fn):
     global_grads = []
     
     # Forward & Backward pass for all microbatches
-    fb_forward(model_part, microbatches, microtargets, loss_fn)
+    total_loss = fb_forward(model_part, microbatches, microtargets, loss_fn, chunck_num)
 
     return total_loss
 
