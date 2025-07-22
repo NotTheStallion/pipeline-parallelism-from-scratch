@@ -10,6 +10,10 @@ test_gpipe:
 profile:
 	nsys profile --sample process-tree --stats true --trace cuda,osrt --force-overwrite true --output profile.nsys-rep torchrun --nproc-per-node 4 gpipe.py
 
+prof:
+	nsys profile --sample process-tree --stats true --trace cuda,osrt --force-overwrite true --output profile.nsys-rep torchrun --nproc-per-node 4 1f1b.py
 
+.PHONY: prof
 
-# nsys-ui profile.nsys-rep
+ui:
+	nsys-ui profile.nsys-rep
