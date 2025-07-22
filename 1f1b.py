@@ -5,7 +5,60 @@ from src.data import MyDataset
 from src.utils import sequential_forward, sequential_backward, fb_forward
 
 
+def _forward(x, model_part):
+    rank = dist.get_rank()
+    world_size = dist.get_world_size()
+    
+    if not x.requires_grad:
+        x.requires_grad_(True)
+    
+    return model_part(x)
+    
+def _backward(microoutput, microtarget, grad_output, loss_fn):
+    rank = dist.get_rank()
+    world_size = dist.get_world_size()
+    
+    if rank == world_size - 1:
+        loss = loss_fn(microoutput, microtarget)
+        loss.backward()
+        return loss.item()
+    else:
+        microoutput.backward(grad_output)
+        return None
+        
 
+def schedule_1f1b(model_part, microbatches, microtargets, loss_fn):
+    rank = dist.get_rank()
+    world_size = dist.get_world_size()
+    
+    microoutputs = [None] * len(microbatches)
+
+    # Warm-up phase
+    for step in range(world_size):
+        # microbatch index forward is i = step - rank if i > 0
+
+        i = step - rank
+        
+        if i >= 0:
+            microbatches[i] = microbatches[i].requires_grad_(True)
+            
+            # Forward pass
+            microoutputs[i] = _forward(microbatches[i], model_part)
+            print(f"\033[94m+ F{i} [{rank}]\033[0m")
+            
+            if rank != 0:
+                # print(f"\033[94mo{i} [{rank} <- {rank - 1}]\033[0m")
+                dist.recv(microoutputs[i], src=rank - 1)
+                
+            if rank != world_size - 1:
+                # print(f"\033[94mi{i} [{rank} -> {rank + 1}]\033[0m")
+                dist.send(microoutputs[i], dst=rank + 1)
+        
+        # print(f"Rank {rank}: Warm-up forward microbatch {i}")
+    
+    print("\033[91mEND WARMUP\033[0m")
+    exit(0)
+    
 
 
 
@@ -18,8 +71,8 @@ def pipelined_iteration_1f1b(model_part, inputs, targets, loss_fn, chunck_num=2)
     """
     rank = dist.get_rank()
     world_size = dist.get_world_size()
-    microbatches = torch.chunk(inputs, world_size * chunck_num)
-    microtargets = torch.chunk(targets, world_size * chunck_num)
+    microbatches = list(torch.chunk(inputs, world_size * chunck_num))
+    microtargets = list(torch.chunk(targets, world_size * chunck_num))
     
     total_loss = 0
     global_inputs = []
@@ -30,7 +83,8 @@ def pipelined_iteration_1f1b(model_part, inputs, targets, loss_fn, chunck_num=2)
     # if rank == 0:
     #     print(chunck_num, world_size)
     #     print(len(microbatches), len(microtargets))
-    total_loss = fb_forward(model_part, microbatches, microtargets, loss_fn, chunck_num)
+    # total_loss = fb_forward(model_part, microbatches, microtargets, loss_fn, chunck_num)
+    total_loss = schedule_1f1b(model_part, microbatches, microtargets, loss_fn)
 
     return total_loss
 
