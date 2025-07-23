@@ -3,21 +3,50 @@ import torch.distributed as dist
 import torch.nn as nn
 from src.data import MyDataset
 from src.utils import sequential_forward, sequential_backward, fb_forward
+import nvtx
+import time
 
 
-def _forward(x, model_part):
-    if not x.requires_grad:
-        x.requires_grad_(True).retain_grad()
+
+def _forward(microinputs, index, model_part):
     
-    return model_part(x)
+    nvtx.push_range(message=f"F{index}", color="blue", domain="1f1b", 
+                            category="forward", payload=rank)
     
-def _backward(microoutput, microtarget, grad_output, loss_fn, rank, world_size):
+    microinput = microinputs[index]
+    
+    time.sleep(0.3)  # Simulate some processing time
+    
+    if not microinput.requires_grad:
+        microinput.requires_grad_(True).retain_grad()
+    
+    result = model_part(microinput)
+    
+    nvtx.pop_range(domain="1f1b")
+    return result
+    
+def _backward(microoutputs, microtargets, grad_outputs, index, loss_fn, rank, world_size):
+    nvtx.push_range(message=f"B{index}", color="red", domain="1f1b", 
+                            category="backward", payload=rank)
+    time.sleep(0.6)  # Simulate some processing time
+    
+    if microoutputs:
+        microoutput = microoutputs[index]
+    if microtargets:
+        microtarget = microtargets[index]
+    if grad_outputs:
+        grad_output = grad_outputs[index]
+    
     if rank == world_size - 1:
         loss = loss_fn(microoutput, microtarget)
         loss.backward()
+        
+        nvtx.pop_range(domain="1f1b")
         return loss.item()
     else:
         microoutput.backward(grad_output)
+        
+        nvtx.pop_range(domain="1f1b")
         return None
         
 
@@ -36,34 +65,37 @@ def schedule_1f1b(model_part, microbatches, microtargets, loss_fn, ops=False, co
         
         if i >= 0:
             if rank != 0:
+                nvtx.push_range(message=f"m_i{i} from {rank-1}", color="green", domain="1f1b", 
+                            category="comm", payload=rank)
+                time.sleep(0.1)
+                
                 if comms : print(f"\033[94mi{i} [{rank} <- {rank - 1}]\033[0m")
                 dist.recv(microbatches[i], src=rank - 1)
+                
+                nvtx.pop_range(domain="1f1b")
             
             # * No grad is requires in the first rank for inputs
             microbatches[i].requires_grad_(True)
             microbatches[i].retain_grad()
             
-            
             # Forward pass
             if ops : print(f"\033[94m+ F{i} [{rank}]\033[0m")
-            microoutputs[i] = _forward(microbatches[i], model_part)
             
-            
+            microoutputs[i] = _forward(microbatches, i, model_part)
                 
             if rank != world_size - 1 and step != world_size - 1:
+                nvtx.push_range(message=f"m_o{i} to {rank+1}", color="green", domain="1f1b", 
+                            category="comm", payload=rank)
+                time.sleep(0.1)
+                
                 if comms : print(f"\033[94mo{i} [{rank} -> {rank + 1}]\033[0m")
                 dist.send(microoutputs[i], dst=rank + 1)
-        
-        if step == 1:
-            exit(0)
-        # print("ha", rank)
-        # dist.barrier(device_ids= [r for r in range(world_size)])
-        # print(f"Rank {rank}: Warm-up forward microbatch {i}")
+                
+                nvtx.pop_range(domain="1f1b")
+
     
     if rank == world_size - 1:
         print("\033[91mEND WARMUP\033[0m")
-    
-    return microbatches, micrograds, microoutputs, 0
     
     # 1F1B steady phase
     start_idx = world_size - rank
@@ -77,23 +109,43 @@ def schedule_1f1b(model_part, microbatches, microtargets, loss_fn, ops=False, co
                 # Last rank computes loss
                 
                 if ops : print(f"\033[91m+ B{b_idx} [{rank}]\033[0m")
-                loss = _backward(microoutputs[b_idx], microtargets[b_idx], None, loss_fn, rank, world_size)
+                loss = _backward(microoutputs, microtargets, None, b_idx, loss_fn, rank, world_size)
+                
+                nvtx.push_range(message=f"m_G{b_idx} to {rank-1}", color="green", domain="1f1b", 
+                            category="comm", payload=rank)
+                time.sleep(0.1)
+                
                 if comms : print(f"G{b_idx} [{rank} -> {rank - 1}]")
                 dist.send(microbatches[b_idx].grad, dst=rank - 1)
+                
+                nvtx.pop_range(domain="1f1b")
                 # print(f"Rank {rank}: Backward microbatch {b_idx} with loss {loss}")
             else:
                 # Receive gradient from next rank
                 micrograds[b_idx] = torch.empty_like(microbatches[b_idx])
+                
+                nvtx.push_range(message=f"m_g{b_idx} from {rank+1}", color="green", domain="1f1b", 
+                            category="comm", payload=rank)
+                time.sleep(0.1)
+                
                 if comms : print(f"G{b_idx} [{rank} <- {rank + 1}]")
                 dist.recv(micrograds[b_idx], src=rank+1)
                 
+                nvtx.pop_range(domain="1f1b")
+                
                 if ops : print(f"\033[91m+ B{b_idx} [{rank}]\033[0m")
-                _backward(microoutputs[b_idx], None, micrograds[b_idx], loss_fn, rank, world_size)
+                _backward(microoutputs, None, micrograds, b_idx, loss_fn, rank, world_size)
+                
                 # Send gradient to previous rank if not first
                 if rank != 0:
+                    nvtx.push_range(message=f"m_G{b_idx} to {rank-1}", color="green", domain="1f1b", 
+                            category="comm", payload=rank)
+                    time.sleep(0.1)
+                    
                     if comms : print(f"G{b_idx} [{rank} -> {rank - 1}]")
                     dist.send(microbatches[b_idx].grad, dst=rank-1)
-                # print(f"Rank {rank}: Backward microbatch {b_idx}")
+                    
+                    nvtx.pop_range(domain="1f1b")
         
         
         
@@ -112,11 +164,17 @@ def schedule_1f1b(model_part, microbatches, microtargets, loss_fn, ops=False, co
                 microbatches[i].retain_grad()
                 
                 if ops : print(f"\033[94m+ F{i} [{rank}]\033[0m")
-                microoutputs[i] = _forward(microbatches[i], model_part)
+                microoutputs[i] = _forward(microbatches, i, model_part)
             
             if i-1 < len(microbatches):
+                nvtx.push_range(message=f"m_O{i-1} to {rank+1}", color="green", domain="1f1b", 
+                            category="comm", payload=rank)
+                time.sleep(0.1)
+                
                 if comms : print(f"O{i-1} [{rank} -> {rank + 1}]")
                 dist.send(microoutputs[i-1], dst=rank+1)
+                
+                nvtx.pop_range(domain="1f1b")
         else:
             # * skip forward if non existent microbatch
             if i >= len(microbatches):
@@ -124,19 +182,32 @@ def schedule_1f1b(model_part, microbatches, microtargets, loss_fn, ops=False, co
             else:
                 # Receive from previous rank
                 microbatches[i] = torch.empty_like(microbatches[i])
+                
+                nvtx.push_range(message=f"m_I{i} from {rank-1}", color="green", domain="1f1b", 
+                            category="comm", payload=rank)
+                time.sleep(0.1)
+                
                 if comms : print(f"I{i} [{rank} <- {rank - 1}]")
                 dist.recv(microbatches[i], src=rank-1)
+                
+                nvtx.pop_range(domain="1f1b")
                 
                 microbatches[i].requires_grad_(True)
                 microbatches[i].retain_grad()
             
                 if ops : print(f"\033[94m+ F{i} [{rank}]\033[0m")
-                microoutputs[i] = _forward(microbatches[i], model_part)
+                microoutputs[i] = _forward(microbatches, i, model_part)
                 
             if i-1 < len(microbatches):
                 if rank != world_size - 1:
+                    nvtx.push_range(message=f"m_O{i-1} to {rank+1}", color="green", domain="1f1b", 
+                            category="comm", payload=rank)
+                    time.sleep(0.1)
+                    
                     if comms : print(f"O{i-1} [{rank} -> {rank + 1}]")
                     dist.send(microoutputs[i-1], dst=rank+1)
+                    
+                    nvtx.pop_range(domain="1f1b")
         
         
         i += 1
@@ -174,21 +245,15 @@ def pipelined_iteration_1f1b(model_part, inputs, targets, loss_fn, chunck_num=2,
     microbatches, micrograds, microoutputs, total_loss = schedule_1f1b(model_part, microbatches, microtargets, loss_fn)
 
     # Send microoutputs from rank world_size - 1 to rank 0
-    # if rank == world_size - 1:
-    #     for microoutput in microoutputs:
-    #         dist.send(microoutput, dst=0)
-    # elif rank == 0:
-    #     last_rank_outputs = []
-    #     for _ in range(len(microoutputs)):
-    #         tensor = torch.empty_like(microoutputs[0])
-    #         dist.recv(tensor, src=world_size - 1)
-    #         last_rank_outputs.append(tensor)
-        
     if rank == world_size - 1:
-        dist.send(microoutputs[0],dst=0)
+        for microoutput in microoutputs:
+            dist.send(microoutput, dst=0)
     elif rank == 0:
-        first_batch_last_rank_output = torch.empty_like(microoutputs[0])
-        dist.recv(first_batch_last_rank_output, src=world_size - 1)
+        last_rank_outputs = []
+        for _ in range(len(microoutputs)):
+            tensor = torch.empty_like(microoutputs[0])
+            dist.recv(tensor, src=world_size - 1)
+            last_rank_outputs.append(tensor)
 
     if rank == 0:
         import copy
@@ -196,12 +261,14 @@ def pipelined_iteration_1f1b(model_part, inputs, targets, loss_fn, chunck_num=2,
         full_targets = copy.deepcopy(microtargets)
 
         print(model)
+        
 
         for i, input in enumerate(full_inputs):
             input.requires_grad_(True)
             input.retain_grad()
             
             output = model(input)
+            
             loss = loss_fn(output, full_targets[i])
             loss.backward()
             
@@ -210,22 +277,15 @@ def pipelined_iteration_1f1b(model_part, inputs, targets, loss_fn, chunck_num=2,
         
         for i, input in enumerate(full_inputs):
             assert torch.allclose(input, microbatches[i]), f"Mismatch in microbatch {i} input"
-        
-        # print(f"len ouputs vs global outputs: {len(global_outputs)} vs {len(last_rank_outputs)}")
-        
-        print("First batch output from last rank:")
-        print(first_batch_last_rank_output)
-        
-        print("Global outputs:")
-        for i, output in enumerate(global_outputs):
-            print(output)
-            # print(last_rank_outputs[i])
-            # assert torch.allclose(output, last_rank_outputs[i]), f"Mismatch in microbatch {i} output"
 
-        # for i, grad in enumerate(global_grads):
-        #     print(f"Microbatch {i} input gradients:")
-        #     print(grad)
-        #     print(micrograds[i])
+        for i, output in enumerate(global_outputs):
+            assert torch.allclose(output, last_rank_outputs[i]), f"Mismatch in microbatch {i} output"
+
+        for i, grad in enumerate(global_grads):
+            print(f"Microbatch {i} input gradients:")
+            print(grad)
+            print(micrograds[i])
+            assert torch.allclose(grad, micrograds[i]), f"Mismatch in microbatch {i} gradients"
             
     exit(0)
 
@@ -282,6 +342,9 @@ if __name__ == "__main__":
         nn.Linear(32, 32),
         nn.Identity() # an even number of layers is easier to split
     )
+
+    for param in model.parameters():
+        dist.broadcast(param.data, src=0) 
 
     # Each rank gets a part of the model
     layers_per_rank = len(model) // world_size
