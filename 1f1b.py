@@ -105,22 +105,27 @@ def schedule_1f1b(model_part, microbatches, microtargets, loss_fn, ops=False, co
         # Backward pass (for microbatch i - (world_size - 1 - rank))
         b_idx = i - (world_size - rank)
         if b_idx >= 0:
+              
             if rank == world_size - 1:
                 # Last rank computes loss
                 
                 if ops : print(f"\033[91m+ B{b_idx} [{rank}]\033[0m")
                 loss = _backward(microoutputs, microtargets, None, b_idx, loss_fn, rank, world_size)
                 
-                nvtx.push_range(message=f"m_G{b_idx} to {rank-1}", color="green", domain="1f1b", 
-                            category="comm", payload=rank)
-                time.sleep(0.1)
+                # nvtx.push_range(message=f"m_G{b_idx} to {rank-1}", color="green", domain="1f1b", 
+                #             category="comm", payload=rank)
+                # time.sleep(0.1)
                 
-                if comms : print(f"G{b_idx} [{rank} -> {rank - 1}]")
-                dist.send(microbatches[b_idx].grad, dst=rank - 1)
+                # if comms : print(f"G{b_idx} [{rank} -> {rank - 1}]")
+                # dist.send(microbatches[b_idx].grad, dst=rank - 1)
                 
-                nvtx.pop_range(domain="1f1b")
+                # nvtx.pop_range(domain="1f1b")
                 # print(f"Rank {rank}: Backward microbatch {b_idx} with loss {loss}")
-            else:
+            
+            
+            
+            
+            if rank != world_size - 1:
                 # Receive gradient from next rank
                 micrograds[b_idx] = torch.empty_like(microbatches[b_idx])
                 
@@ -132,22 +137,46 @@ def schedule_1f1b(model_part, microbatches, microtargets, loss_fn, ops=False, co
                 dist.recv(micrograds[b_idx], src=rank+1)
                 
                 nvtx.pop_range(domain="1f1b")
+            
+            
+            # Send from previous rank
+            if rank != world_size - 1 and i-1 < len(microbatches):
+                nvtx.push_range(message=f"m_O{i-1} to {rank+1}", color="green", domain="1f1b", 
+                            category="comm", payload=rank)
+                time.sleep(0.1)
                 
+                if comms : print(f"= O{i-1} [{rank} -> {rank + 1}]")
+                dist.send(microoutputs[i-1], dst=rank+1)
+                
+                nvtx.pop_range(domain="1f1b")
+            
+            
+            if rank != world_size - 1:
                 if ops : print(f"\033[91m+ B{b_idx} [{rank}]\033[0m")
                 _backward(microoutputs, None, micrograds, b_idx, loss_fn, rank, world_size)
                 
                 # Send gradient to previous rank if not first
-                if rank != 0:
-                    nvtx.push_range(message=f"m_G{b_idx} to {rank-1}", color="green", domain="1f1b", 
+                # if rank != 0:
+                #     nvtx.push_range(message=f"m_G{b_idx} to {rank-1}", color="green", domain="1f1b", 
+                #             category="comm", payload=rank)
+                #     time.sleep(0.1)
+                    
+                #     if comms : print(f"G{b_idx} [{rank} -> {rank - 1}]")
+                #     dist.send(microbatches[b_idx].grad, dst=rank-1)
+                    
+                #     nvtx.pop_range(domain="1f1b")
+        
+        
+            # Send grads to previosu rank
+            if rank != 0:
+                nvtx.push_range(message=f"m_G{b_idx} to {rank-1}", color="green", domain="1f1b", 
                             category="comm", payload=rank)
-                    time.sleep(0.1)
-                    
-                    if comms : print(f"G{b_idx} [{rank} -> {rank - 1}]")
-                    dist.send(microbatches[b_idx].grad, dst=rank-1)
-                    
-                    nvtx.pop_range(domain="1f1b")
-        
-        
+                time.sleep(0.1)
+                
+                if comms : print(f"G{b_idx} [{rank} -> {rank - 1}]")
+                dist.send(microbatches[b_idx].grad, dst=rank - 1)
+                
+                nvtx.pop_range(domain="1f1b")
         
         
         
@@ -177,16 +206,7 @@ def schedule_1f1b(model_part, microbatches, microtargets, loss_fn, ops=False, co
             #     nvtx.pop_range(domain="1f1b")
         
         
-        # Send from previous rank
-        if rank != world_size - 1 and i-1 < len(microbatches):
-            nvtx.push_range(message=f"m_O{i-1} to {rank+1}", color="green", domain="1f1b", 
-                        category="comm", payload=rank)
-            time.sleep(0.1)
-            
-            if comms : print(f"= O{i-1} [{rank} -> {rank + 1}]")
-            dist.send(microoutputs[i-1], dst=rank+1)
-            
-            nvtx.pop_range(domain="1f1b")
+        
         
         
         if rank != 0:
