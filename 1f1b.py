@@ -17,8 +17,8 @@ def _forward(microinputs, index, model_part):
     
     # time.sleep(0.3)  # Simulate some processing time
     
-    if not microinput.requires_grad:
-        microinput.requires_grad_(True).retain_grad()
+    # if not microinput.requires_grad:
+    microinput.requires_grad_(True).retain_grad()
     
     result = model_part(microinput)
     
@@ -50,12 +50,11 @@ def _backward(microoutputs, microtargets, grad_outputs, index, loss_fn, rank, wo
         return None
         
 
-def schedule_1f1b(model_part, microbatches, microtargets, loss_fn, ops=False, comms=True):
+def schedule_1f1b(model_part, microbatches, microtargets, loss_fn, ops=False, comms=False):
     rank = dist.get_rank()
     world_size = dist.get_world_size()
     
-    if rank == world_size - 1:
-        total_loss = 0
+    total_loss = 0
     
     microoutputs = [None] * len(microbatches)
     micrograds = [None] * len(microbatches)
@@ -97,7 +96,7 @@ def schedule_1f1b(model_part, microbatches, microtargets, loss_fn, ops=False, co
                 nvtx.pop_range(domain="1f1b")
 
     
-    if rank == world_size - 1:
+    if rank == world_size - 1 and (ops or comms):
         print("\033[91mEND WARMUP\033[0m")
     
     # 1F1B steady phase
@@ -145,7 +144,22 @@ def schedule_1f1b(model_part, microbatches, microtargets, loss_fn, ops=False, co
             
             if rank != world_size - 1:
                 if ops : print(f"\033[91m+ B{b_idx} [{rank}]\033[0m")
+                
+                # if b_idx == 0 and rank == 0:
+                #     print("inside o1:", microoutputs[0])
+                #     print("inside g1:", micrograds[0])
+                
+                # if b_idx == 0 and rank == 1:
+                #     print("inside o2:", microoutputs[0])
+                #     print("inside g2:", micrograds[0])
                 _backward(microoutputs, None, micrograds, b_idx, loss_fn, rank, world_size)
+                # if b_idx == 0 and rank == 1:
+                #     print("inside o1:", microbatches[0])
+                #     print("inside o1.grad:", microbatches[0].grad)
+                
+                # if b_idx == 0 and rank == 0:
+                #     print("inside input:", microbatches[0])
+                #     print("inside input.grad:", microbatches[0].grad)
         
         
             # Send grads to previosu rank
@@ -206,15 +220,14 @@ def schedule_1f1b(model_part, microbatches, microtargets, loss_fn, ops=False, co
         # print(f"Rank {rank}: Forward microbatch {i}")
         
     
-    if rank == world_size - 1:
+    if rank == world_size - 1 and (ops or comms):
         print("\033[91mEND STEADY\033[0m")
 
-        return microbatches, micrograds, microoutputs, total_loss
-    return microbatches, micrograds, microoutputs, None
+    return microbatches, micrograds, microoutputs, total_loss
 
 
 
-def pipelined_iteration_1f1b(model_part, inputs, targets, loss_fn, chunck_num=2, model=None):
+def pipelined_iteration_1f1b(model_part, inputs, targets, loss_fn, chunck_num=2, model=None, check=False):
     """
     Implement one iteration of pipelined training using GPipe
     - Split the inputs and targets into microbatches
@@ -223,10 +236,10 @@ def pipelined_iteration_1f1b(model_part, inputs, targets, loss_fn, chunck_num=2,
     """
     rank = dist.get_rank()
     world_size = dist.get_world_size()
+    
     microbatches = list(torch.chunk(inputs, world_size * chunck_num))
     microtargets = list(torch.chunk(targets, world_size * chunck_num))
     
-    total_loss = 0
     global_outputs = []
     global_grads = []
     
@@ -235,73 +248,82 @@ def pipelined_iteration_1f1b(model_part, inputs, targets, loss_fn, chunck_num=2,
     #     print(chunck_num, world_size)
     #     print(len(microbatches), len(microtargets))
     # total_loss = fb_forward(model_part, microbatches, microtargets, loss_fn, chunck_num)
+
     microbatches, micrograds, microoutputs, total_loss = schedule_1f1b(model_part, microbatches, microtargets, loss_fn)
-
-    # Send microoutputs from rank world_size - 1 to rank 0
-    if rank == world_size - 1:
-        for microoutput in microoutputs:
-            dist.send(microoutput, dst=0)
-    elif rank == 0:
-        last_rank_outputs = []
-        for _ in range(len(microoutputs)):
-            tensor = torch.empty_like(microoutputs[0])
-            dist.recv(tensor, src=world_size - 1)
-            last_rank_outputs.append(tensor)
-
-    # Gather the model from all devices and compare parameter gradients
-    gathered_models = [None] * world_size
-    dist.all_gather_object(gathered_models, model_part)
-    for i, gathered_model in enumerate(gathered_models):
-        if gathered_model is not None and rank == i:
-            gathered_model = gathered_model.cpu()
-            print(f"Rank {rank} gathered model: {gathered_model}")
     
     
-    if rank == 0:
+    if check == True:
+        # Send microoutputs from rank world_size - 1 to rank 0
+        if rank == world_size - 1:
+            for microoutput in microoutputs:
+                dist.send(microoutput, dst=0)
+        elif rank == 0:
+            last_rank_outputs = []
+            for _ in range(len(microoutputs)):
+                tensor = torch.empty_like(microoutputs[0])
+                dist.recv(tensor, src=world_size - 1)
+                last_rank_outputs.append(tensor)
+
+    
+    if rank == 0 and check == True:
         import copy
         full_inputs = copy.deepcopy(microbatches)
         full_targets = copy.deepcopy(microtargets)
-
-        print(model)
-        # print(model[0].weight.grad)
+        
+        chunck_model = [model[r * chunck_num : (r + 1) * chunck_num] for r in range(world_size)]
 
         for i, input in enumerate(full_inputs):
             input.requires_grad_(True)
             input.retain_grad()
             
-            output = model(input)
+            # Forward pass through the chunked model
+            o1 = chunck_model[0](input)
+            o1.retain_grad()
+            o2 = chunck_model[1](o1)
+            o2.retain_grad()
+            o3 = chunck_model[2](o2)
+            o3.retain_grad()
+            output = chunck_model[3](o3)
+            
             
             loss = loss_fn(output, full_targets[i])
             loss.backward()
             
+            # print("o2 :", o2)
+            # print("o2.grad :", o2.grad)
+            
+            
+            # print(chunck_model[0])
+            
+            # print("o1 :", o1)
+            # print("o1.grad :", o1.grad)
+            # print("input :", input)
+            # print("input.grad :", input.grad)
+            # print("traget :", full_targets[i])
+            
             global_outputs.append(output)
             global_grads.append(input.grad)
+
+            
+
         
-        print(f"Checking inputs...", end="")
+        print(f"Checking inputs...")
         for i, input in enumerate(full_inputs):
             assert torch.allclose(input, microbatches[i]), f"Mismatch in microbatch {i} input"
+        
+        print(f"Checking targets...")
+        for i, target in enumerate(full_targets):
+            assert torch.allclose(target, microtargets[i]), f"Mismatch in microbatch {i} target"
 
-
-        print(f"Checking outputs...", end="")
+        print(f"Checking outputs...")
         for i, output in enumerate(global_outputs):
             assert torch.allclose(output, last_rank_outputs[i]), f"Mismatch in microbatch {i} output"
         
-        sharded_model = [model[r * layers_per_rank : (r + 1) * layers_per_rank] for r in range(world_size)]
-        
-        print(f"Checking parameters...", end="")
-        for rank_idx, gathered_model in enumerate(gathered_models):
-            print(gathered_model[0].weight.grad)
-            exit(0)
-            
-            sharded_params = [param for param in sharded_model[rank_idx].parameters()]
-            gathered_params = [param for param in gathered_model.parameters()]
-            
-            for param_idx, (sharded_param, gathered_param) in enumerate(zip(sharded_params, gathered_params)):
-                print(sharded_param.grad)
-                print(gathered_param.grad)
-                assert torch.allclose(sharded_param, gathered_param), f"Mismatch in parameters of rank {rank_idx} at index {param_idx}"
+        print("CHecking W gradients...")
+        for param, chunk_param in zip(local_model.parameters(), chunck_model[0].parameters()):
+            assert torch.allclose(param.grad, chunk_param.grad), f"Gradient for {param} doesn't match chunked model parameter {chunk_param}. Difference: {torch.norm(param.grad - chunk_param.grad)}"
 
-    exit(0)
+    
     return total_loss
 
 
@@ -317,17 +339,23 @@ def pipelined_training_1f1b(model_part, chunck_num=2, model=None):
     rank = dist.get_rank()
     world_size = dist.get_world_size()
 
+    check = True
     dataset = MyDataset()
     loss_fn = nn.MSELoss()
     optimizer = torch.optim.Adam(model_part.parameters())
     batch_size = world_size * chunck_num
-    data_loader = torch.utils.data.DataLoader(dataset, batch_size=batch_size, shuffle=True)
+    
+    # * Ensure the data is shuffled in the same way across all devices
+    generator = torch.Generator()
+    generator.manual_seed(42)
+    data_loader = torch.utils.data.DataLoader(dataset, batch_size=batch_size, shuffle=True, generator=generator)
 
     for epoch in range(10):
         epoch_loss = 0
         for inputs, targets in data_loader:
             optimizer.zero_grad()
-            loss = pipelined_iteration_1f1b(model_part, inputs, targets, loss_fn, chunck_num, model)
+            loss = pipelined_iteration_1f1b(model_part, inputs, targets, loss_fn, chunck_num, model, check=check)
+            check=False
             optimizer.step()
             if rank == world_size - 1:
                 epoch_loss += loss
@@ -343,6 +371,8 @@ if __name__ == "__main__":
     dist.init_process_group(backend="gloo")
     rank = dist.get_rank()
     world_size = dist.get_world_size()
+
+    torch.manual_seed(42)
 
     # This is the full model
     model = nn.Sequential(
