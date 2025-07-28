@@ -40,11 +40,14 @@ def _backward(microoutputs, microtargets, grad_outputs, index, loss_fn, rank, wo
     if rank == world_size - 1:
         loss = loss_fn(microoutput, microtarget)
         loss.backward()
+        del microoutput
         
         nvtx.pop_range(domain="1f1b")
         return loss.item()
     else:
         microoutput.backward(grad_output)
+        del grad_output
+        del microoutput
         
         nvtx.pop_range(domain="1f1b")
         return None
@@ -125,6 +128,7 @@ def schedule_1f1b(model_part, microbatches, microtargets, loss_fn, ops=False, co
                 # time.sleep(0.1)
                 
                 if comms : print(f"G{b_idx} [{rank} <- {rank + 1}]")
+                
                 dist.recv(micrograds[b_idx], src=rank+1)
                 
                 nvtx.pop_range(domain="1f1b")
@@ -170,6 +174,11 @@ def schedule_1f1b(model_part, microbatches, microtargets, loss_fn, ops=False, co
                 
                 if comms : print(f"G{b_idx} [{rank} -> {rank - 1}]")
                 dist.send(microbatches[b_idx].grad, dst=rank - 1)
+                
+                del microbatches[b_idx].grad
+                tmp_activation = microbatches[b_idx]
+                microbatches[b_idx] = None
+                del tmp_activation
                 
                 nvtx.pop_range(domain="1f1b")
         
