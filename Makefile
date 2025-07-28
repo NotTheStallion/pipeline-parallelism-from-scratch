@@ -16,6 +16,9 @@ profile:
 prof:
 	nsys profile --sample process-tree --stats false --trace nvtx --force-overwrite true --output profile.nsys-rep torchrun --nproc-per-node 4 1f1b.py
 
+prof_ts:
+	nsys profile --sample process-tree --stats false --trace nvtx --force-overwrite true --output profile.nsys-rep torchrun --nproc-per-node 4 standard-kd.py
+
 .PHONY: prof
 
 ui:
