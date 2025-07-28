@@ -4,6 +4,9 @@ gpipe:
 1f1b:
 	torchrun --nproc-per-node 4 1f1b.py
 
+tspipe:
+	torchrun --nproc-per-node 4 standard-kd.py
+
 test_gpipe:
 	torchrun --nproc-per-node 4 test_gpipe.py
 
