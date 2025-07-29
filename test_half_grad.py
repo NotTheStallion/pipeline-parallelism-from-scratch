@@ -19,7 +19,7 @@ if __name__ == "__main__":
     )
 
     
-    dataset = MyDataset(dist=False)
+    dataset = MyDataset(distributed=False)
     loss_fn = nn.MSELoss()
     batch_size = 12 # @param
     
