@@ -586,6 +586,7 @@ if __name__== "__main__":
         print(f"student outputs: {student_outputs}")
         print(f"teacher outputs: {teacher_outputs}")
     
+    # !critical : model part doesn't do full piepline. 
     dist_inputs, dist_targets, dist_teacher_outputs, dist_teacher_inputs, dist_student_outputs, dist_global_grads = tspipe(nn_deep_part, nn_light_part, _inputs, _targets, loss_fn, T, soft_target_loss_weight, ce_loss_weight)
     
     # checking last layer output
