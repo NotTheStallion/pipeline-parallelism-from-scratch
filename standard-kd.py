@@ -31,7 +31,7 @@ def _forward(microinputs, index, model_part, teacher=False):
 def _backward(microoutputs, microtargets, grad_outputs, index, loss_fn, rank, world_size, retain_graph=False):
     nvtx.push_range(message=f"B{index}", color="red", domain="tspipe", 
                             category="backward", payload=rank)
-    time.sleep(0.6)  # Simulate some processing time
+    time.sleep(0.3)  # Simulate some processing time
     
     if microoutputs:
         microoutput = microoutputs[index]
@@ -104,7 +104,7 @@ def trapezoid(global_inputs, global_targets, global_teacher_outputs, global_stud
         if num_f < num_f_before_backward and num_b < 2 * (world_size - 1):
             # Teacher forwards before student backward
             
-            if rank != 0:
+            if rank != 0 and t_f+num_f < len(global_inputs):
                 # Receive inputs from the previous rank
                 nvtx.push_range(message=f"m_t_i{t_f+num_f} from {rank-1}", color="green", domain="tspipe",
                             category="comm", payload=rank)
@@ -114,9 +114,25 @@ def trapezoid(global_inputs, global_targets, global_teacher_outputs, global_stud
                 
                 nvtx.pop_range(domain="tspipe")
             
-            global_teacher_outputs[t_f+num_f] = _forward(global_inputs, t_f+num_f, nn_deep_part, teacher=True)
-
-            if rank != world_size - 1:
+            if t_f+num_f < len(global_inputs):
+                global_teacher_outputs[t_f+num_f] = _forward(global_inputs, t_f+num_f, nn_deep_part, teacher=True)
+            
+            pos = s_f + num_b//2
+            
+            if rank != world_size - 1 and num_f+1 == num_f_before_backward and pos < len(global_inputs):
+                # Receive gradients from the next rank
+                global_grads[pos] = torch.empty_like(global_inputs[pos])
+                
+                nvtx.push_range(message=f"m_s_G{pos},{num_b%2} from {rank+1}", color="green", domain="tspipe",
+                            category="comm", payload=rank)
+                time.sleep(0.1)
+                
+                dist.recv(global_grads[pos], src=rank + 1)
+                
+                nvtx.pop_range(domain="tspipe")
+            
+            
+            if rank != world_size - 1 and t_f+num_f < len(global_inputs):
                 # Send outputs to the next rank
                 nvtx.push_range(message=f"m_t_o{t_f+num_f} to {rank+1}", color="green", domain="tspipe",
                             category="comm", payload=rank)
@@ -130,15 +146,18 @@ def trapezoid(global_inputs, global_targets, global_teacher_outputs, global_stud
         
         elif num_f >= num_f_before_backward and num_b < 2 * (world_size - 1):
             # Student backward
-            print(f"Rank {rank} student backward {s_f+i}")
+            pos = s_f + num_b//2
             
-            pos = (s_f + num_b)//2
+            if pos >= len(global_inputs):
+                num_b += 1
+                continue
             
-            if rank != world_size - 1:
+            
+            if rank != world_size - 1 and num_b > 0 :
                 # Receive gradients from the next rank
                 global_grads[pos] = torch.empty_like(global_inputs[pos])
                 
-                nvtx.push_range(message=f"m_s_g{s_f+num_b} from {rank+1}", color="green", domain="tspipe",
+                nvtx.push_range(message=f"m_s_g{pos},{num_b%2} from {rank+1}", color="green", domain="tspipe",
                             category="comm", payload=rank)
                 time.sleep(0.1)
                 
@@ -146,19 +165,34 @@ def trapezoid(global_inputs, global_targets, global_teacher_outputs, global_stud
                 
                 nvtx.pop_range(domain="tspipe")
             
-            if (s_f + num_b) % 2 == 0:
+            
+            if rank != 0 and num_b <= 1 and t_f+num_f < len(global_inputs):
+                # Receive inputs from the previous rank
+                nvtx.push_range(message=f"M_t_I{t_f+num_f} from {rank-1}", color="green", domain="tspipe",
+                            category="comm", payload=rank)
+                time.sleep(0.1)
+                
+                dist.recv(global_inputs[t_f+num_f], src=rank - 1)
+                
+                nvtx.pop_range(domain="tspipe")
+            
+            print(f"[rank : {rank}] s_f {s_f} num_b {num_b}")
+            # print(f"Backwarding first, list pos : {pos} / microGbatch {s_f + num_b}")
+            if num_b % 2 == 0:
                 loss = _backward(global_student_outputs, global_targets, global_grads, pos, loss_fn, rank, world_size, retain_graph=True)
             else:
                 loss = _backward(global_student_outputs, global_targets, global_grads, pos, loss_fn, rank, world_size)
-            print("="*20)
-            print(global_inputs[pos].grad.shape)
+            # print("="*20)
+            # print(global_inputs[pos].grad.shape)
+            
             
             if rank != 0:
                 # Send gradients to the previous rank
-                nvtx.push_range(message=f"m_s_g{s_f+num_b} to {rank-1}", color="green", domain="tspipe",
+                nvtx.push_range(message=f"m_s_g{pos},{num_b%2} to {rank-1}", color="green", domain="tspipe",
                             category="comm", payload=rank)
                 time.sleep(0.1)
-                dist.send(global_inputs[s_f+num_b].grad, dst=rank - 1)
+                
+                dist.send(global_inputs[pos].grad, dst=rank - 1)
                 
                 nvtx.pop_range(domain="tspipe")
             
@@ -168,8 +202,12 @@ def trapezoid(global_inputs, global_targets, global_teacher_outputs, global_stud
             if num_f > 2 * (world_size - 1):
                 break
             
+            if t_f + num_f >= len(global_inputs):
+                num_f += 1
+                continue
             
-            if rank != 0:
+            
+            if rank != 0 and num_f > num_f_before_backward + 1:
                 # Receive inputs from the previous rank
                 nvtx.push_range(message=f"M_t_i{t_f+num_f} from {rank-1}", color="green", domain="tspipe",
                             category="comm", payload=rank)
@@ -245,6 +283,7 @@ def train_tspipe(nn_deep_part, nn_light_part, global_inputs, global_targets, los
             
         else:
             # trapezoidal phase
+            print(f"Phase {i_f} rank {rank} s_f {s_f} t_f {t_f}")
             i_f, s_f, t_f = trapezoid(global_inputs, global_targets, global_teacher_outputs, global_student_outputs, global_grads, i_f, s_f, t_f, nn_deep_part, nn_light_part, loss_fn, T, soft_target_loss_weight, ce_loss_weight, rank, world_size)
             
             if t_f >= len(global_inputs) & s_f >= len(global_inputs):
