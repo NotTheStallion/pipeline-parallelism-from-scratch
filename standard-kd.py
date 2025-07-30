@@ -28,27 +28,35 @@ def _forward(microinputs, index, model_part, teacher=False):
     nvtx.pop_range(domain="tspipe")
     return result
     
-def _backward(microoutputs, microtargets, grad_outputs, index, loss_fn, rank, world_size, retain_graph=False):
+def _backward(student_outputs, microtargets, teacher_outputs, grad_outputs, index, loss_fn, rank, world_size, retain_graph=False):
     nvtx.push_range(message=f"B{index}", color="red", domain="tspipe", 
                             category="backward", payload=rank)
     time.sleep(0.3)  # Simulate some processing time
     
-    if microoutputs:
-        microoutput = microoutputs[index]
+    if student_outputs:
+        student_output = student_outputs[index]
+    if teacher_outputs:
+        teacher_output = teacher_outputs[index]
     if microtargets:
         microtarget = microtargets[index]
     if grad_outputs:
         grad_output = grad_outputs[index]
     
     if rank == world_size - 1:
-        loss = loss_fn(microoutput, microtarget)
+        
+        y_hat = nn.functional.softmax(teacher_output / T, dim=-1)
+        y = nn.functional.softmax(student_output / T, dim=-1)
+        soft_targets_loss = torch.sum(y_hat * y.log()) * (T**2)
+        ce_loss = loss_fn(student_output, microtarget)
+        loss = - soft_targets_loss + ce_loss
+
         loss.backward(retain_graph=retain_graph)
         # del microoutput
         
         nvtx.pop_range(domain="tspipe")
         return loss.item()
     else:
-        microoutput.backward(grad_output, retain_graph=retain_graph)
+        student_output.backward(grad_output, retain_graph=retain_graph)
         # del grad_output
         # del microoutput
         
@@ -62,6 +70,8 @@ def trapezoid(global_inputs, global_targets, global_teacher_outputs, global_stud
     # num of single box diagonal : i_f
     rank = dist.get_rank()
     world_size = dist.get_world_size()
+    
+    loss = 0
     
     for i in range(world_size - 1):
         if s_f+i >= len(global_inputs):
@@ -176,12 +186,18 @@ def trapezoid(global_inputs, global_targets, global_teacher_outputs, global_stud
                 
                 nvtx.pop_range(domain="tspipe")
             
-            print(f"[rank : {rank}] s_f {s_f} num_b {num_b}")
+            # print(f"[rank : {rank}] s_f {s_f} num_b {num_b}")
             # print(f"Backwarding first, list pos : {pos} / microGbatch {s_f + num_b}")
             if num_b % 2 == 0:
-                loss = _backward(global_student_outputs, global_targets, global_grads, pos, loss_fn, rank, world_size, retain_graph=True)
+                __loss = _backward(global_student_outputs, global_targets, global_teacher_outputs, global_grads, pos, loss_fn, rank, world_size, retain_graph=True)
+                _loss = 0
             else:
-                loss = _backward(global_student_outputs, global_targets, global_grads, pos, loss_fn, rank, world_size)
+                _loss = _backward(global_student_outputs, global_targets, global_teacher_outputs, global_grads, pos, loss_fn, rank, world_size)
+                
+            
+            
+            if rank == world_size - 1:
+                loss += _loss
             # print("="*20)
             # print(global_inputs[pos].grad.shape)
             
@@ -237,7 +253,9 @@ def trapezoid(global_inputs, global_targets, global_teacher_outputs, global_stud
     s_f += world_size - 1
     t_f += 2 * (world_size - 1)
     
-    return i_f, s_f, t_f
+    if rank == world_size - 1:
+        return i_f, s_f, t_f, loss
+    return i_f, s_f, t_f, None
 
 
 
@@ -283,8 +301,23 @@ def train_tspipe(nn_deep_part, nn_light_part, global_inputs, global_targets, los
             
         else:
             # trapezoidal phase
-            print(f"Phase {i_f} rank {rank} s_f {s_f} t_f {t_f}")
-            i_f, s_f, t_f = trapezoid(global_inputs, global_targets, global_teacher_outputs, global_student_outputs, global_grads, i_f, s_f, t_f, nn_deep_part, nn_light_part, loss_fn, T, soft_target_loss_weight, ce_loss_weight, rank, world_size)
+            if rank == world_size - 1:
+                print(f"Epoch {(s_f // (world_size - 1))//data_loader_len}/{epochs}")
+            
+            i_f, s_f, t_f, loss = trapezoid(global_inputs, global_targets, global_teacher_outputs, global_student_outputs, global_grads, i_f, s_f, t_f, nn_deep_part, nn_light_part, loss_fn, T, soft_target_loss_weight, ce_loss_weight, rank, world_size)
+            
+            if rank == world_size - 1:
+                print(loss)
+            
+            nvtx.push_range(message=f"OP", color="purple", domain="tspipe",
+                            category="comm", payload=rank)
+            time.sleep(0.1)
+            
+            optimizer.step()
+            
+            nvtx.pop_range(domain="tspipe")
+            
+            optimizer.zero_grad()
             
             if t_f >= len(global_inputs) & s_f >= len(global_inputs):
                 break
