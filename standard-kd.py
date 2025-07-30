@@ -166,13 +166,13 @@ def trapezoid(global_inputs, global_targets, global_teacher_outputs, global_stud
                 nvtx.pop_range(domain="tspipe")
             
             
-            if rank != 0 and num_b <= 1 and t_f+num_f < len(global_inputs):
+            if rank != 0 and num_b <= 1 and t_f+num_f+num_b%2 < len(global_inputs):
                 # Receive inputs from the previous rank
-                nvtx.push_range(message=f"M_t_I{t_f+num_f} from {rank-1}", color="green", domain="tspipe",
+                nvtx.push_range(message=f"M_t_I{t_f+num_f+num_b%2} from {rank-1}", color="green", domain="tspipe",
                             category="comm", payload=rank)
                 time.sleep(0.1)
                 
-                dist.recv(global_inputs[t_f+num_f], src=rank - 1)
+                dist.recv(global_inputs[t_f+num_f+num_b%2], src=rank - 1)
                 
                 nvtx.pop_range(domain="tspipe")
             
