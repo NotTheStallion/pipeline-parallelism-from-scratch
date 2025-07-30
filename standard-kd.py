@@ -7,6 +7,7 @@ from torch.utils.data import DataLoader, TensorDataset
 from src.data import MyDataset
 import nvtx
 import time
+import copy
 
 
 def _forward(microinputs, index, model_part, teacher=False):
@@ -16,7 +17,7 @@ def _forward(microinputs, index, model_part, teacher=False):
     
     microinput = microinputs[index]
     
-    time.sleep(0.3)  # Simulate some processing time
+    # time.sleep(0.3)  # Simulate some processing time
     
     if teacher:
         with torch.no_grad():
@@ -31,7 +32,7 @@ def _forward(microinputs, index, model_part, teacher=False):
 def _backward(student_outputs, microtargets, teacher_outputs, grad_outputs, index, loss_fn, rank, world_size, retain_graph=False):
     nvtx.push_range(message=f"B{index}", color="red", domain="tspipe", 
                             category="backward", payload=rank)
-    time.sleep(0.3)  # Simulate some processing time
+    # time.sleep(0.3)  # Simulate some processing time
     
     if student_outputs:
         student_output = student_outputs[index]
@@ -64,7 +65,7 @@ def _backward(student_outputs, microtargets, teacher_outputs, grad_outputs, inde
         return None
 
 
-def trapezoid(global_inputs, global_targets, global_teacher_outputs, global_student_outputs, global_grads, i_f, s_f, t_f, nn_deep_part, nn_light_part, loss_fn, T, soft_target_loss_weight, ce_loss_weight, rank, world_size):
+def trapezoid(global_inputs, global_targets, global_teacher_outputs, global_teacher_inputs, global_student_outputs, global_grads, i_f, s_f, t_f, nn_deep_part, nn_light_part, loss_fn, T, soft_target_loss_weight, ce_loss_weight, rank, world_size):
     # first student forward index : s_f
     # first teacher forward index : t_f
     # num of single box diagonal : i_f
@@ -81,7 +82,7 @@ def trapezoid(global_inputs, global_targets, global_teacher_outputs, global_stud
             # Receive inputs from the previous rank
             nvtx.push_range(message=f"m_s_i{s_f+i} from {rank-1}", color="green", domain="tspipe",
                         category="comm", payload=rank)
-            time.sleep(0.1)
+            # time.sleep(0.1)
             
             dist.recv(global_inputs[s_f+i], src=rank - 1)
             
@@ -93,7 +94,7 @@ def trapezoid(global_inputs, global_targets, global_teacher_outputs, global_stud
             # Send outputs to the next rank
             nvtx.push_range(message=f"m_s_o{s_f+i} to {rank+1}", color="green", domain="tspipe",
                         category="comm", payload=rank)
-            time.sleep(0.1)
+            # time.sleep(0.1)
             
             dist.send(global_student_outputs[s_f+i], dst=rank + 1)
             
@@ -118,14 +119,14 @@ def trapezoid(global_inputs, global_targets, global_teacher_outputs, global_stud
                 # Receive inputs from the previous rank
                 nvtx.push_range(message=f"m_t_i{t_f+num_f} from {rank-1}", color="green", domain="tspipe",
                             category="comm", payload=rank)
-                time.sleep(0.1)
+                # time.sleep(0.1)
                 
-                dist.recv(global_inputs[t_f+num_f], src=rank - 1)
+                dist.recv(global_teacher_inputs[t_f+num_f], src=rank - 1)
                 
                 nvtx.pop_range(domain="tspipe")
             
             if t_f+num_f < len(global_inputs):
-                global_teacher_outputs[t_f+num_f] = _forward(global_inputs, t_f+num_f, nn_deep_part, teacher=True)
+                global_teacher_outputs[t_f+num_f] = _forward(global_teacher_inputs, t_f+num_f, nn_deep_part, teacher=True)
             
             pos = s_f + num_b//2
             
@@ -135,7 +136,7 @@ def trapezoid(global_inputs, global_targets, global_teacher_outputs, global_stud
                 
                 nvtx.push_range(message=f"m_s_G{pos},{num_b%2} from {rank+1}", color="green", domain="tspipe",
                             category="comm", payload=rank)
-                time.sleep(0.1)
+                # time.sleep(0.1)
                 
                 dist.recv(global_grads[pos], src=rank + 1)
                 
@@ -146,7 +147,7 @@ def trapezoid(global_inputs, global_targets, global_teacher_outputs, global_stud
                 # Send outputs to the next rank
                 nvtx.push_range(message=f"m_t_o{t_f+num_f} to {rank+1}", color="green", domain="tspipe",
                             category="comm", payload=rank)
-                time.sleep(0.1)
+                # time.sleep(0.1)
                 
                 dist.send(global_teacher_outputs[t_f+num_f], dst=rank + 1)
                 
@@ -169,7 +170,7 @@ def trapezoid(global_inputs, global_targets, global_teacher_outputs, global_stud
                 
                 nvtx.push_range(message=f"m_s_g{pos},{num_b%2} from {rank+1}", color="green", domain="tspipe",
                             category="comm", payload=rank)
-                time.sleep(0.1)
+                # time.sleep(0.1)
                 
                 dist.recv(global_grads[pos], src=rank + 1)
                 
@@ -180,7 +181,7 @@ def trapezoid(global_inputs, global_targets, global_teacher_outputs, global_stud
                 # Receive inputs from the previous rank
                 nvtx.push_range(message=f"M_t_I{t_f+num_f+num_b%2} from {rank-1}", color="green", domain="tspipe",
                             category="comm", payload=rank)
-                time.sleep(0.1)
+                # time.sleep(0.1)
                 
                 dist.recv(global_inputs[t_f+num_f+num_b%2], src=rank - 1)
                 
@@ -206,7 +207,7 @@ def trapezoid(global_inputs, global_targets, global_teacher_outputs, global_stud
                 # Send gradients to the previous rank
                 nvtx.push_range(message=f"m_s_g{pos},{num_b%2} to {rank-1}", color="green", domain="tspipe",
                             category="comm", payload=rank)
-                time.sleep(0.1)
+                # time.sleep(0.1)
                 
                 dist.send(global_inputs[pos].grad, dst=rank - 1)
                 
@@ -227,19 +228,19 @@ def trapezoid(global_inputs, global_targets, global_teacher_outputs, global_stud
                 # Receive inputs from the previous rank
                 nvtx.push_range(message=f"M_t_i{t_f+num_f} from {rank-1}", color="green", domain="tspipe",
                             category="comm", payload=rank)
-                time.sleep(0.1)
+                # time.sleep(0.1)
                 
-                dist.recv(global_inputs[t_f+num_f], src=rank - 1)
+                dist.recv(global_teacher_inputs[t_f+num_f], src=rank - 1)
                 
                 nvtx.pop_range(domain="tspipe")
             
-            global_teacher_outputs[t_f+num_f] = _forward(global_inputs, t_f+num_f, nn_deep_part, teacher=True)
+            global_teacher_outputs[t_f+num_f] = _forward(global_teacher_inputs, t_f+num_f, nn_deep_part, teacher=True)
 
             if rank != world_size - 1:
                 # Send outputs to the next rank
                 nvtx.push_range(message=f"M_t_o{t_f+num_f} to {rank+1}", color="green", domain="tspipe",
                             category="comm", payload=rank)
-                time.sleep(0.1)
+                # time.sleep(0.1)
                 
                 dist.send(global_teacher_outputs[t_f+num_f], dst=rank + 1)
                 
@@ -265,6 +266,7 @@ def train_tspipe(nn_deep_part, nn_light_part, global_inputs, global_targets, los
     loss = 0
     
     global_teacher_outputs = [None] * len(global_inputs)
+    global_teacher_inputs = copy.deepcopy(global_inputs)
     global_student_outputs = [None] * len(global_inputs)
     global_grads = [None] * len(global_inputs) 
     
@@ -279,19 +281,19 @@ def train_tspipe(nn_deep_part, nn_light_part, global_inputs, global_targets, los
                 # Receive inputs from the previous rank
                 nvtx.push_range(message=f"m_t_i{i_f} from {rank-1}", color="green", domain="tspipe", 
                             category="comm", payload=rank)
-                time.sleep(0.1)
+                # time.sleep(0.1)
                 
-                dist.recv(global_inputs[i_f], src=rank - 1)
+                dist.recv(global_teacher_inputs[i_f], src=rank - 1)
                 
                 nvtx.pop_range(domain="tspipe")
             
-            global_teacher_outputs[i_f] = _forward(global_inputs, i_f, nn_deep_part, teacher=True)
+            global_teacher_outputs[i_f] = _forward(global_teacher_inputs, i_f, nn_deep_part, teacher=True)
 
             if rank != world_size - 1:
                 # Send outputs to the next rank
                 nvtx.push_range(message=f"m_t_o{i_f} to {rank+1}", color="green", domain="tspipe", 
                             category="comm", payload=rank)
-                time.sleep(0.1)
+                # time.sleep(0.1)
                 
                 dist.send(global_teacher_outputs[i_f], dst=rank + 1)
                 
@@ -302,63 +304,57 @@ def train_tspipe(nn_deep_part, nn_light_part, global_inputs, global_targets, los
         else:
             # trapezoidal phase
             if rank == world_size - 1:
-                print(f"Epoch {(s_f // (world_size - 1))//data_loader_len}/{epochs}")
+                print(f"Epoch {(s_f // (world_size - 1))/data_loader_len}/{epochs}")
+            optimizer.zero_grad()
             
-            i_f, s_f, t_f, loss = trapezoid(global_inputs, global_targets, global_teacher_outputs, global_student_outputs, global_grads, i_f, s_f, t_f, nn_deep_part, nn_light_part, loss_fn, T, soft_target_loss_weight, ce_loss_weight, rank, world_size)
+            i_f, s_f, t_f, loss = trapezoid(global_inputs, global_targets, global_teacher_outputs, global_teacher_inputs, global_student_outputs, global_grads, i_f, s_f, t_f, nn_deep_part, nn_light_part, loss_fn, T, soft_target_loss_weight, ce_loss_weight, rank, world_size)
             
             if rank == world_size - 1:
                 print(loss)
             
             nvtx.push_range(message=f"OP", color="purple", domain="tspipe",
                             category="comm", payload=rank)
-            time.sleep(0.1)
+            # time.sleep(0.1)
             
             optimizer.step()
             
             nvtx.pop_range(domain="tspipe")
             
-            optimizer.zero_grad()
             
             if t_f >= len(global_inputs) & s_f >= len(global_inputs):
                 break
 
         i_f += 1
     
-    return loss
+    return loss, global_teacher_inputs, global_teacher_outputs, global_inputs, global_student_outputs, global_grads
 
 
-def tspipe(nn_deep_part, nn_light_part, data_loader, loss_fn, T, soft_target_loss_weight, ce_loss_weight):
+def tspipe(nn_deep_part, nn_light_part, inputs, targets, loss_fn, T, soft_target_loss_weight, ce_loss_weight):
     rank = dist.get_rank()
     world_size = dist.get_world_size()
 
     check = True
-    dataset = MyDataset(n=30)
-    loss_fn = nn.MSELoss()
+    loss_fn = nn.MSELoss(reduction='sum')
     optimizer = torch.optim.Adam(nn_light_part.parameters())
-    batch_size = 12 # @param
     epochs = 2 # @param
-    
-    # * Ensure the data is shuffled in the same way across all devices
-    generator = torch.Generator()
-    generator.manual_seed(42)
-    data_loader = torch.utils.data.DataLoader(dataset, batch_size=batch_size, shuffle=True, generator=generator)
 
     if rank == world_size - 1:
         print(f"Training with {len(data_loader)} batches per epoch in {epochs} epochs and {world_size - 1} chunks")
 
-    global_inputs = []
-    global_targets = []
-    for epoch in range(epochs):
-        for inputs, targets in data_loader:
-            global_inputs.extend(list(torch.chunk(inputs, world_size - 1)))
-            global_targets.extend(list(torch.chunk(targets, world_size - 1)))
+    global_inputs = copy.deepcopy(inputs)
+    global_targets = copy.deepcopy(targets)
+    
+    # if rank == 0:
+    #     print(f"input 0: {global_inputs[0]}")
+    #     print(f"target 0: {global_targets[0]}")
     
     if rank == world_size - 1:
         print(f"Global inputs: {len(global_inputs)}")
         print(f"Global targets: {len(global_targets)}")
     
-    train_tspipe(nn_deep_part, nn_light_part, global_inputs, global_targets, loss_fn, T, soft_target_loss_weight, ce_loss_weight, check, epochs, len(data_loader), optimizer)
-            
+    loss, global_teacher_inputs, global_teacher_outputs, _, global_student_outputs, global_grads = train_tspipe(nn_deep_part, nn_light_part, global_inputs, global_targets, loss_fn, T, soft_target_loss_weight, ce_loss_weight, check, epochs, len(data_loader), optimizer)
+    
+    return global_inputs, global_targets, global_teacher_outputs, global_teacher_inputs, global_student_outputs, global_grads
     
 
 
@@ -406,9 +402,10 @@ if __name__== "__main__":
         print(f"LightNN parameters: {total_params_light}")
 
     
-    dataset = MyDataset()
+    dataset = MyDataset(n=30, seed=42)
     loss_fn = nn.MSELoss()
     batch_size = 12 # @param
+    epochs = 2 # @param
     
     # * Ensure the data is shuffled in the same way across all devices
     generator = torch.Generator()
@@ -439,7 +436,7 @@ if __name__== "__main__":
     
     # optimizer = torch.optim.Adam(nn_light.parameters())
     
-    # for epoch in range(10):
+    # for epoch in range(epochs):
     #     epoch_loss = 0
     #     for inputs, targets in data_loader:
     #         optimizer.zero_grad()
@@ -466,7 +463,7 @@ if __name__== "__main__":
     soft_target_loss_weight = 0.5  # Weight for the soft target loss
     ce_loss_weight = 0.5  # Weight for the cross-entropy loss   
     
-    # for epoch in range(10):
+    # for epoch in range(epochs):
     #     epoch_loss = 0
     #     for inputs, targets in data_loader:
     #         optimizer.zero_grad()
@@ -499,8 +496,115 @@ if __name__== "__main__":
     #         print(f"Epoch {epoch} loss: {epoch_loss / len(data_loader)}")
     
     
+    loss_fn = nn.MSELoss(reduction='sum')
     
-    tspipe(nn_deep, nn_light, data_loader, loss_fn, T, soft_target_loss_weight, ce_loss_weight)
+    # ! TSPipe single GPU
     
+    layers_per_rank = len(nn_light) // world_size
+    nn_light_part = nn_light[rank * layers_per_rank : (rank + 1) * layers_per_rank]
+    print(f"Rank {rank} LightNN model: {nn_light_part}")
+
+    layers_per_rank = len(nn_deep) // world_size
+    nn_deep_part = nn_deep[rank * layers_per_rank : (rank + 1) * layers_per_rank]
+    print(f"Rank {rank} DeepNN model: {nn_deep_part}")
+    
+    
+    # length : epochs * len(data_loader) * (world_size - 1)
+    _inputs = []
+    _targets = []
+    for epoch in range(epochs):
+        for ins, tas in data_loader:
+            _inputs.extend(list(torch.chunk(ins, world_size - 1)))
+            _targets.extend(list(torch.chunk(tas, world_size - 1)))
+    
+    
+    if rank == world_size - 1:
+        print(f"batches per epoch: {len(data_loader)}")
+    
+    _epoch = 0
+    _batch = 0
+    _microbatch = 0
+    
+    for i, (_input, targets) in enumerate(zip(_inputs, _targets)):
+        epoch = ((i // (world_size - 1)) // len(data_loader)) % epochs
+        batch = (i // (world_size - 1)) % len(data_loader)
+        microbatch = i
+        
+        if rank == world_size - 1:
+            print(f"Epoch {epoch}, Batch {batch}, Microbatch {microbatch}")
+        
+        # if i % len(data_loader) == 0:
+        #     optimizer.zero_grad()
+        #     loss = 0
+        
+        _input.requires_grad_(True).retain_grad()
+        
+        with torch.no_grad():
+            teacher_outputs = nn_deep(_input)
+        student_outputs = nn_light(_input)
+        
+        y_hat = nn.functional.softmax(teacher_outputs / T, dim=-1)
+        y = nn.functional.softmax(student_outputs / T, dim=-1)
+        soft_targets_loss = torch.sum(y_hat * y.log()) * (T**2)
+        ce_loss = loss_fn(student_outputs, targets)
+        _loss = - soft_targets_loss + ce_loss
+        
+        # if rank == world_size - 1:
+        #     print(f"Microbatch : {i} , Loss: {_loss.item()}")
+        
+        _loss.backward()
+        
+        loss += _loss.item()
+        
+        if i % (world_size - 1) == world_size - 2:
+            optimizer.step()
+        
+        # epoch_loss += loss
+
+        if rank == world_size - 1 and epoch != _epoch:
+            # print(f"epoch loss: {loss/(len(data_loader))}")
+            loss = 0
+            optimizer.zero_grad()
+        
+        _epoch = epoch
+        _batch = batch
+        _microbatch = microbatch
+        
+        break
+    
+    if rank == world_size - 1:
+        print(f"Final loss: {loss/(len(data_loader))}")
+    
+    # if rank == 0:
+    #     print(f"_inputs: {_inputs[0]} {len(_inputs)}")
+    #     print(f"_targets: {_targets[0]} {len(_targets)}")
+    
+    if rank == world_size - 1:
+        print(f"Inputs: {_inputs[0]}")
+        print(f"Targets: {_targets[0]}")
+        
+        print(f"student outputs: {student_outputs}")
+        print(f"teacher outputs: {teacher_outputs}")
+    
+    dist_inputs, dist_targets, dist_teacher_outputs, dist_teacher_inputs, dist_student_outputs, dist_global_grads = tspipe(nn_deep_part, nn_light_part, _inputs, _targets, loss_fn, T, soft_target_loss_weight, ce_loss_weight)
+    
+    # checking last layer output
+    if rank == world_size - 1:
+        print(f"Last rank inputs: {dist_inputs[0]}")
+        print(f"Last rank targets: {dist_targets[0]}")
+        
+        print(f"Last rank output: {dist_student_outputs[0]}")
+        print(f"last rank teacher output: {dist_teacher_outputs[0]}")
+        
+    
+    # checking gradients in first layer
+    if rank == 0:
+        print(_inputs[0].grad.shape)
+        print(dist_inputs[0].grad.shape)
+        
+        # print(f"Inputs grad: {_inputs[0].grad}")
+        # print(f"Distributed Inputs grad: {dist_inputs[0].grad}")
+        
+        # torch.allclose(_inputs[0].grad, dist_inputs[0].grad)
     
     dist.destroy_process_group()
