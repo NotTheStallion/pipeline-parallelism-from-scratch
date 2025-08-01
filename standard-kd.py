@@ -294,7 +294,7 @@ def train_tspipe(nn_deep_part, nn_light_part, global_inputs, global_targets, los
                 nvtx.push_range(message=f"m_t_o{i_f} to {rank+1}", color="green", domain="tspipe", 
                             category="comm", payload=rank)
                 # time.sleep(0.1)
-                
+                # print(f"\033[91mRank {rank} sending teacher output {global_teacher_outputs[i_f].shape} to rank {rank + 1}\033[0m")
                 dist.send(global_teacher_outputs[i_f], dst=rank + 1)
                 
                 nvtx.pop_range(domain="tspipe")
@@ -362,17 +362,35 @@ if __name__== "__main__":
     dist.init_process_group(backend="gloo")
     rank = dist.get_rank()
     world_size = dist.get_world_size()
+    
+    print(f"Rank {rank} of {world_size} started")
 
     torch.manual_seed(42)
 
     nn_deep = nn.Sequential(
-        nn.Linear(32, 64),
+        nn.Linear(32, 32),
         nn.ReLU(),
-        nn.Linear(64, 128),
+        nn.Linear(32, 32),
         nn.ReLU(),
-        nn.Linear(128, 64),
+        nn.Linear(32, 32),
         nn.ReLU(),
-        nn.Linear(64, 32),
+        nn.Linear(32, 32),
+        nn.ReLU(),
+        nn.Linear(32, 32),
+        nn.ReLU(),
+        nn.Linear(32, 32),
+        nn.ReLU(),
+        nn.Linear(32, 32),
+        nn.ReLU(),
+        nn.Linear(32, 32),
+        nn.ReLU(),
+        nn.Linear(32, 32),
+        nn.ReLU(),
+        nn.Linear(32, 32),
+        nn.ReLU(),
+        nn.Linear(32, 32),
+        nn.ReLU(),
+        nn.Linear(32, 32),
         nn.Identity() # an even number of layers is easier to split
     )
     
@@ -381,13 +399,17 @@ if __name__== "__main__":
 
     
     nn_light = nn.Sequential(
-        nn.Linear(32, 16),
+        nn.Linear(32, 32),
         nn.ReLU(),
-        nn.Linear(16, 16),
+        nn.Linear(32, 32),
         nn.ReLU(),
-        nn.Linear(16, 16),
+        nn.Linear(32, 32),
         nn.ReLU(),
-        nn.Linear(16, 32),
+        nn.Linear(32, 32),
+        nn.ReLU(),
+        nn.Linear(32, 32),
+        nn.ReLU(),
+        nn.Linear(32, 32),
         nn.Identity() # an even number of layers is easier to split
     )
     
@@ -402,9 +424,9 @@ if __name__== "__main__":
         print(f"LightNN parameters: {total_params_light}")
 
     
-    dataset = MyDataset(n=30, seed=42)
+    dataset = MyDataset(n=42, seed=42)
     loss_fn = nn.MSELoss()
-    batch_size = 12 # @param
+    batch_size = 21 # @param
     epochs = 2 # @param
     
     # * Ensure the data is shuffled in the same way across all devices
@@ -509,6 +531,11 @@ if __name__== "__main__":
     print(f"Rank {rank} DeepNN model: {nn_deep_part}")
     
     
+    
+    nn_light_list = [ nn_light[r * layers_per_rank : (r + 1) * layers_per_rank] for r in range(world_size)]
+    nn_deep_list = [ nn_deep[r * layers_per_rank : (r + 1) * layers_per_rank] for r in range(world_size)]
+    
+    
     # length : epochs * len(data_loader) * (world_size - 1)
     _inputs = []
     _targets = []
@@ -526,6 +553,7 @@ if __name__== "__main__":
     _microbatch = 0
     
     for i, (_input, targets) in enumerate(zip(_inputs, _targets)):
+        
         epoch = ((i // (world_size - 1)) // len(data_loader)) % epochs
         batch = (i // (world_size - 1)) % len(data_loader)
         microbatch = i
@@ -540,8 +568,20 @@ if __name__== "__main__":
         _input.requires_grad_(True).retain_grad()
         
         with torch.no_grad():
-            teacher_outputs = nn_deep(_input)
-        student_outputs = nn_light(_input)
+            # teacher_outputs = nn_deep(_input)
+            _input1 = nn_deep_list[0](_input)
+            _input2 = nn_deep_list[1](_input1)
+            _input3 = nn_deep_list[2](_input2)
+            teacher_outputs = nn_deep_list[3](_input3)
+        
+        # student_outputs = nn_light(_input)
+        s_input1 = nn_light_list[0](_input)
+        s_input1.retain_grad()
+        s_input2 = nn_light_list[1](s_input1)
+        s_input2.retain_grad()
+        s_input3 = nn_light_list[2](s_input2)
+        s_input3.retain_grad()
+        student_outputs = nn_light_list[3](s_input3)
         
         y_hat = nn.functional.softmax(teacher_outputs / T, dim=-1)
         y = nn.functional.softmax(student_outputs / T, dim=-1)
@@ -572,36 +612,61 @@ if __name__== "__main__":
         
         break
     
-    if rank == world_size - 1:
-        print(f"Final loss: {loss/(len(data_loader))}")
+    # if rank == world_size - 1:
+    #     print(f"Final loss: {loss/(len(data_loader))}")
     
-    # if rank == 0:
-    #     print(f"_inputs: {_inputs[0]} {len(_inputs)}")
-    #     print(f"_targets: {_targets[0]} {len(_targets)}")
     
-    if rank == world_size - 1:
-        print(f"Inputs: {_inputs[0]}")
-        print(f"Targets: {_targets[0]}")
+    # if rank == world_size - 1:
+    #     print(f"Inputs: {_inputs[0]}")
+    #     print(f"Targets: {_targets[0]}")
         
-        print(f"student outputs: {student_outputs}")
-        print(f"teacher outputs: {teacher_outputs}")
+        # print(f"First rank input grad: {_inputs[0].grad}")
+        
+        # print(f"student outputs: {student_outputs}")
+        # print(f"teacher outputs: {teacher_outputs}")
+        
+        # print(f"Last rank student input: {_input3}")
+        # print(f"Last rank student input grad: {s_input3.grad}")
     
     # !critical : model part doesn't do full piepline. 
     dist_inputs, dist_targets, dist_teacher_outputs, dist_teacher_inputs, dist_student_outputs, dist_global_grads = tspipe(nn_deep_part, nn_light_part, _inputs, _targets, loss_fn, T, soft_target_loss_weight, ce_loss_weight)
     
-    # checking last layer output
-    if rank == world_size - 1:
-        print(f"Last rank inputs: {dist_inputs[0]}")
-        print(f"Last rank targets: {dist_targets[0]}")
+    
+    if rank == 0:
+        print("Comparing inputs and targets")
+        for inp, dist_inp in zip(_inputs, dist_inputs):
+            assert torch.allclose(inp, dist_inp), "Mismatch between _inputs and dist_inputs"
         
-        print(f"Last rank output: {dist_student_outputs[0]}")
-        print(f"last rank teacher output: {dist_teacher_outputs[0]}")
+        for tar, dist_tar in zip(_targets, dist_targets):
+            assert torch.allclose(tar, dist_tar), "Mismatch between _targets and dist_targets"
+    
+    if rank == world_size - 1:
+        print("Comparing teacher outputs")
+        assert torch.allclose(teacher_outputs, dist_teacher_outputs[0]), "Mismatch between global_teacher_outputs and dist_teacher_outputs"
+        # for t_out, dist_t_out in zip(_teacher_outputs, dist_teacher_outputs):
+        #     assert torch.allclose(t_out, dist_t_out), "Mismatch between global_teacher_outputs and dist_teacher_outputs"
+        
+        print("Comparing student outputs")
+        assert torch.allclose(student_outputs, dist_student_outputs[0]), "Mismatch between global_teacher_outputs and dist_teacher_outputs"
+        # for s_out, dist_s_out in zip(_student_outputs, dist_student_outputs):
+        #     assert torch.allclose(s_out, dist_s_out), "Mismatch between global_student_outputs and dist_student_outputs"
+    
+    # checking last layer output
+    # if rank == 0 :
+    #     print(f"First rank inputs: {dist_inputs[0]}")
+    #     print(f"First rank targets: {dist_targets[0]}")
+    
+    # if rank == world_size - 1:  
+        # print(f"Last rank student output: {dist_student_outputs[0]}")
+        # print(f"last rank teacher output: {dist_teacher_outputs[0]}")
+        # print(f"Last rank student input: {dist_inputs[0]}")
+        # print(f"Last rank student input grad: {dist_inputs[0].grad}")
         
     
     # checking gradients in first layer
-    if rank == 0:
-        print(_inputs[0].grad.shape)
-        print(dist_inputs[0].grad.shape)
+    # if rank == 0:
+    #     print(_inputs[0].grad.shape)
+    #     print(dist_inputs[0].grad.shape)
         
         # print(f"Inputs grad: {_inputs[0].grad}")
         # print(f"Distributed Inputs grad: {dist_inputs[0].grad}")
