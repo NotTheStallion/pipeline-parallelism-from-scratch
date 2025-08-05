@@ -50,6 +50,8 @@ def _backward(student_outputs, microtargets, teacher_outputs, grad_outputs, inde
         soft_targets_loss = torch.sum(y_hat * y.log()) * (T**2)
         ce_loss = loss_fn(student_output, microtarget)
         loss = - soft_targets_loss + ce_loss
+        
+        print(f"Loss for microbatch {index}: {loss.item()}")
 
         loss.backward(retain_graph=retain_graph)
         # del microoutput
@@ -524,16 +526,16 @@ if __name__== "__main__":
     
     layers_per_rank = len(nn_light) // world_size
     nn_light_part = nn_light[rank * layers_per_rank : (rank + 1) * layers_per_rank]
+    nn_light_list = [ nn_light[r * layers_per_rank : (r + 1) * layers_per_rank] for r in range(world_size)]
     print(f"Rank {rank} LightNN model: {nn_light_part}")
 
     layers_per_rank = len(nn_deep) // world_size
     nn_deep_part = nn_deep[rank * layers_per_rank : (rank + 1) * layers_per_rank]
+    nn_deep_list = [ nn_deep[r * layers_per_rank : (r + 1) * layers_per_rank] for r in range(world_size)]
     print(f"Rank {rank} DeepNN model: {nn_deep_part}")
     
     
     
-    nn_light_list = [ nn_light[r * layers_per_rank : (r + 1) * layers_per_rank] for r in range(world_size)]
-    nn_deep_list = [ nn_deep[r * layers_per_rank : (r + 1) * layers_per_rank] for r in range(world_size)]
     
     
     # length : epochs * len(data_loader) * (world_size - 1)
@@ -589,6 +591,8 @@ if __name__== "__main__":
         ce_loss = loss_fn(student_outputs, targets)
         _loss = - soft_targets_loss + ce_loss
         
+        print(f"Rank {rank} Microbatch {i} Loss: {_loss.item()}")
+        
         # if rank == world_size - 1:
         #     print(f"Microbatch : {i} , Loss: {_loss.item()}")
         
@@ -625,11 +629,21 @@ if __name__== "__main__":
         # print(f"student outputs: {student_outputs}")
         # print(f"teacher outputs: {teacher_outputs}")
         
-        # print(f"Last rank student input: {_input3}")
-        # print(f"Last rank student input grad: {s_input3.grad}")
+        # print(f"Last rank student input: {_input}")
+        # print(f"Last rank student input grad: {_input.grad}")
     
     # !critical : model part doesn't do full piepline. 
     dist_inputs, dist_targets, dist_teacher_outputs, dist_teacher_inputs, dist_student_outputs, dist_global_grads = tspipe(nn_deep_part, nn_light_part, _inputs, _targets, loss_fn, T, soft_target_loss_weight, ce_loss_weight)
+
+    print(f"Checking model parts")
+    
+    for param1, param2 in zip(nn_light_part.parameters(), nn_light_list[rank].parameters()):
+        assert torch.allclose(param1, param2), "Mismatch in weights between nn_light_part and nn_light_list[rank]"
+    print(f"nn_light_list[{rank}] weights match nn_light_part weights")
+
+    for param1, param2 in zip(nn_deep_part.parameters(), nn_deep_list[rank].parameters()):
+        assert torch.allclose(param1, param2), "Mismatch in weights between nn_deep_part and nn_deep_list[rank]"
+    print(f"nn_deep_list[{rank}] weights match nn_deep_part weights")
     
     
     if rank == 0:
@@ -655,12 +669,21 @@ if __name__== "__main__":
     # if rank == 0 :
     #     print(f"First rank inputs: {dist_inputs[0]}")
     #     print(f"First rank targets: {dist_targets[0]}")
-    
-    # if rank == world_size - 1:  
-        # print(f"Last rank student output: {dist_student_outputs[0]}")
-        # print(f"last rank teacher output: {dist_teacher_outputs[0]}")
         # print(f"Last rank student input: {dist_inputs[0]}")
         # print(f"Last rank student input grad: {dist_inputs[0].grad}")
+    
+    if rank == world_size - 1:  
+        # print(f"Last rank student output: {dist_student_outputs[0]}")
+        # print(f"last rank teacher output: {dist_teacher_outputs[0]}")
+        print(f"single node inputs: {s_input3}")
+        print(f"single node student outputs: {student_outputs}")
+        print(f"single node inputs grad: {s_input3.grad}")
+        
+        print("="*20)
+        
+        print(f"Last rank student input: {dist_inputs[0]}")
+        print(f"Last rank student output: {dist_student_outputs[0]}")
+        print(f"Last rank student input grad: {dist_inputs[0].grad}")
         
     
     # checking gradients in first layer
