@@ -20,7 +20,7 @@ for i in range(1, p+1):
         delta_M[(i, j, 'B')] = M_W - M_B
         delta_M[(i, j, 'W')] = -M_W
 
-M_limit = 100
+M_limit = 1000
 T_comm = 0
 
 # Define Problem
@@ -46,24 +46,30 @@ for i in range(1, p+1):
                     for cp in c_set:
                             
                         if c == "W" and cp == "F":
-                            O[(i, j, c, i, jp, cp)] = 0
-                            O[(i, j, cp, i, jp, c)] = 1
+                            O[(i, j, c, i, jp, cp)].setInitialValue(0)
+                            O[(i, j, c, i, jp, cp)].fixValue()
+                            # O[(i, j, cp, i, jp, c)].setInitialValue(1)
                         elif c == "B" and cp == "F":
-                            O[(i, j, c, i, jp, cp)] = 0
-                            O[(i, j, cp, i, jp, c)] = 1
+                            O[(i, j, c, i, jp, cp)].setInitialValue(0)
+                            O[(i, j, c, i, jp, cp)].fixValue()
+                            # O[(i, j, cp, i, jp, c)].setInitialValue(1)
                         elif c == "W" and cp == "B":
-                            O[(i, j, c, i, jp, cp)] = 0
-                            O[(i, j, cp, i, jp, c)] = 1
+                            O[(i, j, c, i, jp, cp)].setInitialValue(0)
+                            O[(i, j, c, i, jp, cp)].fixValue()
+                            # O[(i, j, cp, i, jp, c)].setInitialValue(1)
                     
                         if c == cp and j< jp:
-                            O[(i, j, c, i, jp, cp)] = 1
+                            O[(i, j, c, i, jp, cp)].setInitialValue(1)
+                            O[(i, j, c, i, jp, cp)].fixValue()
                         
                         if c == cp and j > jp:
-                            O[(i, j, c, i, jp, cp)] = 0
+                            O[(i, j, c, i, jp, cp)].setInitialValue(0)
+                            O[(i, j, c, i, jp, cp)].fixValue()
                         
                         
                         if (j == jp and c == cp):
-                            O[(i, j, c, i, jp, cp)] = 1
+                            O[(i, j, c, i, jp, cp)].setInitialValue(1)
+                            O[(i, j, c, i, jp, cp)].fixValue()
                                 
                         
 
@@ -88,8 +94,6 @@ for i in range(1, p+1):
         
         if i < p:
             prob += E[(i, j, 'B')] >= E[(i+1, j, 'B')] + T_comm + T[(i, j, 'B')]
-        # else:
-        #     prob += E[(i, j, 'B')] >= T[(i, j, 'B')] # ! cricital not needed
             
 
 for (i,j,c) in E:
