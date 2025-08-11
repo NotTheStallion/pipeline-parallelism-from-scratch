@@ -29,54 +29,61 @@ prob = pulp.LpProblem("Pipeline_Scheduling", pulp.LpMinimize)
 # Variables
 E = pulp.LpVariable.dicts("E", [(i, j, c) for i in range(1, p+1)
                                 for j in range(1, m+1)
-                                for c in c_set], lowBound=0)
+                                for c in c_set], lowBound=T[(1, 1, 'F')])
 O = pulp.LpVariable.dicts("O", [(i, j, c, i, jp, cp)
                                 for i in range(1, p+1)
                                 for j in range(1, m+1)
                                 for c in c_set
                                 for jp in range(1, m+1)
-                                for cp in c_set], cat="Binary")
+                                for cp in c_set], cat="Integer", lowBound=0, upBound=1)
 
 
-# fill O
+
+# # fill O
 for i in range(1, p+1):
     for j in range(1, m+1):
         for c in c_set:
             for jp in range(1, m+1):
                 for cp in c_set:
                     
+                    # If the microbatch is the same, do forward before backward and backward before weight update
                     if j == jp:
-                        if c == "W" and cp == "F":
-                            O[(i, j, c, i, jp, cp)].setInitialValue(0)
+                        if c == "F" and cp == "B":
+                            O[(i, j, c, i, jp, cp)].setInitialValue(1)
                             O[(i, j, c, i, jp, cp)].fixValue()
-                            # O[(i, jp, cp, i, j, c)].setInitialValue(1)
-                            # O[(i, jp, cp, i, j, c)].fixValue()
-                        elif c == "B" and cp == "F":
-                            O[(i, j, c, i, jp, cp)].setInitialValue(0)
+                            
+                            O[(i, jp, cp, i, j, c)].setInitialValue(0)
+                            O[(i, jp, cp, i, j, c)].fixValue()
+                            
+                        if c == "B" and cp == "W":
+                            O[(i, j, c, i, jp, cp)].setInitialValue(1)
                             O[(i, j, c, i, jp, cp)].fixValue()
-                            # O[(i, jp, cp, i, j, c)].setInitialValue(1)
-                            # O[(i, jp, cp, i, j, c)].fixValue()
-                        elif c == "W" and cp == "B":
-                            O[(i, j, c, i, jp, cp)].setInitialValue(0)
+                            
+                            O[(i, jp, cp, i, j, c)].setInitialValue(0)
+                            O[(i, jp, cp, i, j, c)].fixValue()
+                        
+                        if c == "F" and cp == "W":
+                            O[(i, j, c, i, jp, cp)].setInitialValue(1)
                             O[(i, j, c, i, jp, cp)].fixValue()
-                            # O[(i, jp, cp, i, j, c)].setInitialValue(1)
-                            # O[(i, jp, cp, i, j, c)].fixValue()
-                
+                            
+                            O[(i, jp, cp, i, j, c)].setInitialValue(0)
+                            O[(i, jp, cp, i, j, c)].fixValue()
+
+
+                    # Given the same operation, do the previous microbatch first
                     if c == cp and j<=jp:
                         O[(i, j, c, i, jp, cp)].setInitialValue(1)
                         O[(i, j, c, i, jp, cp)].fixValue()
-                        
-                        # O[(i, jp, cp, i, j, c)].setInitialValue(0)
-                        # O[(i, jp, cp, i, j, c)].fixValue()
-                    
-                    if c == cp and j > jp:
+                    elif c == cp and j>jp:
                         O[(i, j, c, i, jp, cp)].setInitialValue(0)
                         O[(i, j, c, i, jp, cp)].fixValue()
                     
+                    # O[(4, 1, "B", 4, 2, "F")].setInitialValue(1)
+                    # O[(4, 1, "B", 4, 2, "F")].fixValue()
                     
-                    # if (j == jp and c == cp):
-                    #     O[(i, j, c, i, jp, cp)].setInitialValue(1)
-                    #     O[(i, j, c, i, jp, cp)].fixValue()
+                    # O[(4, 2, "F", 4, 1, "B")].setInitialValue(0)
+                    # O[(4, 2, "F", 4, 1, "B")].fixValue()
+                    
                             
                     
 
@@ -88,54 +95,98 @@ prob += Z
 for i in range(1, p + 1):
     prob += Z >= E[(i, m, 'W')] - E[(i, 1, 'F')] + T[(i, 1, 'F')]
 
+# @note : for two operation where the microbatches are different, only one is done before the other
 for i in range(1, p + 1):
     for j in range(1, m + 1):
         for c in c_set:
             for jp in range(1, m + 1):
                 for cp in c_set:
-                    prob += O[(i, j, c, i, jp, cp)] + O[(i, jp, cp, i, j, c)] == 1
+                    # !critical : find a way to make the matrix symetric without the problem being infeasable.
+                    if j != jp or c != cp:
+                        print(f"Adding constraint for O[{i}, {j}, {c}, {i}, {jp}, {cp}]")
+                        prob += O[(i, j, c, i, jp, cp)] + O[(i, jp, cp, i, j, c)] == 1
+
 
 # Constraints
 for i in range(1, p+1):
     for j in range(1, m+1):
         if i > 1:
-            prob += E[(i, j, 'F')] >= E[(i-1, j, 'F')] + T_comm + T[(i, j, 'F')]
+            prob += E[(i, j, 'F')] >= E[(i-1, j, 'F')] + T_comm + T[(i, j, 'F')] # forward rank dependency
         elif j==1:
             prob += E[(i, j, 'F')] == T[(i, j, 'F')]
         
         if i < p:
-            prob += E[(i, j, 'B')] >= E[(i+1, j, 'B')] + T_comm + T[(i, j, 'B')]
+            prob += E[(i, j, 'B')] >= E[(i+1, j, 'B')] + T_comm + T[(i, j, 'B')] # backward rank dependency
 
 for (i,j,c) in E:
     for (ip,jp,cp) in E:
         if i == ip:
-            prob += E[(i, j, c)] >= E[(i, jp, cp)] + T[(i, j, c)] - O[(i,j,c,i,jp,cp)] * 1e12
+            prob += E[(i, j, c)] >= E[(i, jp, cp)] + T[(i, j, c)] - O[(i,j,c,i,jp,cp)] * 1e20 # prevent overlap
 
-
-for (i,jp,cp) in E:
-    prob += M_limit >= delta_M[(i, jp, cp)] + pulp.lpSum(delta_M[(i, j, c)] * O[(i, j, c, i, jp, cp)]
-                                                  for j in range(1, m+1)
-                                                  for c in c_set)
+                        
+# for (i,jp,cp) in E:
+#     prob += M_limit >= delta_M[(i, jp, cp)] + pulp.lpSum(delta_M[(i, j, c)] * O[(i, j, c, i, jp, cp)]
+#                                                   for j in range(1, m+1)
+#                                                   for c in c_set)
 
 # Solve
 prob.solve()
 print("Status:", pulp.LpStatus[prob.status])
 
 schedule = {}
+before = {}
 max_time = 0
 for v in prob.variables():
-    print(f"{v.name} = {v.varValue}")
+    # print(f"{v.name} = {v.varValue}")
+    
+    if "O" in v.name:
+        before[v.name] = v.varValue
     
     if "Max" in v.name:
-        print("Max Stage Completion Time:", v.varValue)
         max_time = v.varValue
+        print(f"Max Stage Completion Time: {max_time}")
     
     if "E" in v.name:
         schedule[v.name] = v.varValue
-        # print(v.name, "=", v.varValue)
+        # print(f"{v.name} = {v.varValue}")
 
-# print("Schedule:")
-# print(schedule)
+# node 4, (1,b) vs (2,f)
+# print(before["O_(4,_1,_'B',_4,_2,_'F')"])
+# print(before["O_(4,_2,_'F',_4,_1,_'B')"])
+# print(f"{schedule["E_(1,_1,_"F")"]} >= {schedule["E_(1,_2,_"F")"]} + 1 - {before["O_(1,_1,_'F',_1,_2,_'F')"]}")
+# print(f"{schedule['E_(1,_2,_'F')']} >= {schedule['E_(1,_1,_'F')']} + 1 - {before['O_(1,_2,_'F',_1,_1,_'F')']}")
+
+
+# E_(1,_2,_'F'): 1.0
+# E_(1,_2,_'W'): 1.0
+# print(before["O_(1,_2,_'F',_1,_2,_'W')"])
+# print(before["O_(1,_2,_'W',_1,_2,_'F')"])
+
+
+print(" comp 1 vs 2")
+print(before["O_(1,_1,_'F',_1,_2,_'F')"])
+print(before["O_(1,_2,_'F',_1,_1,_'F')"])
+
+print(" comp 2 vs 3")
+print(before["O_(1,_2,_'F',_1,_3,_'F')"])
+print(before["O_(1,_3,_'F',_1,_2,_'F')"])
+
+print(" comp 3 vs 4")
+print(before["O_(1,_3,_'F',_1,_4,_'F')"])
+print(before["O_(1,_4,_'F',_1,_3,_'F')"])
+
+print(" comp 4 vs 1")
+print(before["O_(1,_4,_'F',_1,_1,_'F')"])
+print(before["O_(1,_1,_'F',_1,_4,_'F')"])
+
+print(" comp 1 vs 3")
+print(before["O_(1,_1,_'F',_1,_3,_'F')"])
+print(before["O_(1,_3,_'F',_1,_1,_'F')"])
+
+# 4 and 2
+print(" comp 2 vs 4")
+print(before["O_(1,_2,_'F',_1,_4,_'F')"])
+print(before["O_(1,_4,_'F',_1,_2,_'F')"])
 
 sorted_keys = sorted(schedule.keys(), key=lambda k: schedule[k])
 
@@ -199,7 +250,7 @@ ax.set_yticks([1, 2, 3, 4])
 ax.set_yticklabels(['GPU 1', 'GPU 2', 'GPU 3', 'GPU 4'])
 ax.set_title('GPU Operation Schedule (F=Forward, B=Backward, W=Weight Update)')
 ax.grid(True, linestyle='--', alpha=0.6)
-ax.set_xlim(0, max_time + 1)
+ax.set_xlim(0, 25 + 1) # @param max_time
 ax.set_ylim(0, p+1)
 
 handles = [patches.Patch(color=op_colors[c], label=c) for c in op_colors]
