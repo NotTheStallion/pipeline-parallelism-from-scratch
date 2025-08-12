@@ -11,6 +11,7 @@ The theoritical scheudling graph is the following:
 
 The practical implementation of Gpipe is the following:
 
+*Currently not available*
 ![Gpipe practical](res/gpipe_nsys.png)
 
 # 1F1B
@@ -32,3 +33,7 @@ TSPipe is a scheduling technique specifically made for Teacher Student type of a
 Source : https://proceedings.mlr.press/v162/lim22a/lim22a.pdf
 
 ![TSPipe](res/tspipe.drawio.png)
+
+The practical implementation of TSPipe is the following:
+
+![TSPipe practical](res/tspipe_nsys.png)
