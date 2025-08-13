@@ -1,260 +1,184 @@
+import itertools
+from collections import defaultdict
 import pulp
-
-
-p = 4
-m = 4
-c_set = ['F', 'B', 'W']
-
-T = {}
-for i in range(1, p+1):
-    for j in range(1, m+1):
-        T[(i, j, 'F')] = 1
-        T[(i, j, 'B')] = 1
-        T[(i, j, 'W')] = 1
-
-M_B, M_W = 25, 10
-delta_M = {}
-for i in range(1, p+1):
-    for j in range(1, m+1):
-        delta_M[(i, j, 'F')] = M_B
-        delta_M[(i, j, 'B')] = M_W - M_B
-        delta_M[(i, j, 'W')] = -M_W
-
-M_limit = 12400
-T_comm = 0
-
-# Define Problem
-prob = pulp.LpProblem("Pipeline_Scheduling", pulp.LpMinimize)
-
-# Variables
-E = pulp.LpVariable.dicts("E", [(i, j, c) for i in range(1, p+1)
-                                for j in range(1, m+1)
-                                for c in c_set], lowBound=T[(1, 1, 'F')])
-O = pulp.LpVariable.dicts("O", [(i, j, c, i, jp, cp)
-                                for i in range(1, p+1)
-                                for j in range(1, m+1)
-                                for c in c_set
-                                for jp in range(1, m+1)
-                                for cp in c_set], cat="Integer", lowBound=0, upBound=1)
-
-
-
-# # fill O
-for i in range(1, p+1):
-    for j in range(1, m+1):
-        for c in c_set:
-            for jp in range(1, m+1):
-                for cp in c_set:
-                    
-                    # If the microbatch is the same, do forward before backward and backward before weight update
-                    if j == jp:
-                        if c == "F" and cp == "B":
-                            O[(i, j, c, i, jp, cp)].setInitialValue(1)
-                            O[(i, j, c, i, jp, cp)].fixValue()
-                            
-                            O[(i, jp, cp, i, j, c)].setInitialValue(0)
-                            O[(i, jp, cp, i, j, c)].fixValue()
-                            
-                        if c == "B" and cp == "W":
-                            O[(i, j, c, i, jp, cp)].setInitialValue(1)
-                            O[(i, j, c, i, jp, cp)].fixValue()
-                            
-                            O[(i, jp, cp, i, j, c)].setInitialValue(0)
-                            O[(i, jp, cp, i, j, c)].fixValue()
-                        
-                        if c == "F" and cp == "W":
-                            O[(i, j, c, i, jp, cp)].setInitialValue(1)
-                            O[(i, j, c, i, jp, cp)].fixValue()
-                            
-                            O[(i, jp, cp, i, j, c)].setInitialValue(0)
-                            O[(i, jp, cp, i, j, c)].fixValue()
-
-
-                    # Given the same operation, do the previous microbatch first
-                    if c == cp and j<=jp:
-                        O[(i, j, c, i, jp, cp)].setInitialValue(1)
-                        O[(i, j, c, i, jp, cp)].fixValue()
-                    elif c == cp and j>jp:
-                        O[(i, j, c, i, jp, cp)].setInitialValue(0)
-                        O[(i, j, c, i, jp, cp)].fixValue()
-                    
-                    # O[(4, 1, "B", 4, 2, "F")].setInitialValue(1)
-                    # O[(4, 1, "B", 4, 2, "F")].fixValue()
-                    
-                    # O[(4, 2, "F", 4, 1, "B")].setInitialValue(0)
-                    # O[(4, 2, "F", 4, 1, "B")].fixValue()
-                    
-                            
-                    
-
-
-# Objective https://stackoverflow.com/questions/46319467/can-i-make-a-min-z-maxa-b-c-in-pulp
-Z = pulp.LpVariable("Max_Stage_Completion", lowBound=0)
-prob += Z
-
-for i in range(1, p + 1):
-    prob += Z >= E[(i, m, 'W')] - E[(i, 1, 'F')] + T[(i, 1, 'F')]
-
-# @note : for two operation where the microbatches are different, only one is done before the other
-for i in range(1, p + 1):
-    for j in range(1, m + 1):
-        for c in c_set:
-            for jp in range(1, m + 1):
-                for cp in c_set:
-                    # !critical : find a way to make the matrix symetric without the problem being infeasable.
-                    if j != jp or c != cp:
-                        print(f"Adding constraint for O[{i}, {j}, {c}, {i}, {jp}, {cp}]")
-                        prob += O[(i, j, c, i, jp, cp)] + O[(i, jp, cp, i, j, c)] == 1
-
-
-# Constraints
-for i in range(1, p+1):
-    for j in range(1, m+1):
-        if i > 1:
-            prob += E[(i, j, 'F')] >= E[(i-1, j, 'F')] + T_comm + T[(i, j, 'F')] # forward rank dependency
-        elif j==1:
-            prob += E[(i, j, 'F')] == T[(i, j, 'F')]
-        
-        if i < p:
-            prob += E[(i, j, 'B')] >= E[(i+1, j, 'B')] + T_comm + T[(i, j, 'B')] # backward rank dependency
-
-for (i,j,c) in E:
-    for (ip,jp,cp) in E:
-        if i == ip:
-            prob += E[(i, j, c)] >= E[(i, jp, cp)] + T[(i, j, c)] - O[(i,j,c,i,jp,cp)] * 1e20 # prevent overlap
-
-                        
-# for (i,jp,cp) in E:
-#     prob += M_limit >= delta_M[(i, jp, cp)] + pulp.lpSum(delta_M[(i, j, c)] * O[(i, j, c, i, jp, cp)]
-#                                                   for j in range(1, m+1)
-#                                                   for c in c_set)
-
-# Solve
-prob.solve()
-print("Status:", pulp.LpStatus[prob.status])
-
-schedule = {}
-before = {}
-max_time = 0
-for v in prob.variables():
-    # print(f"{v.name} = {v.varValue}")
-    
-    if "O" in v.name:
-        before[v.name] = v.varValue
-    
-    if "Max" in v.name:
-        max_time = v.varValue
-        print(f"Max Stage Completion Time: {max_time}")
-    
-    if "E" in v.name:
-        schedule[v.name] = v.varValue
-        # print(f"{v.name} = {v.varValue}")
-
-# node 4, (1,b) vs (2,f)
-# print(before["O_(4,_1,_'B',_4,_2,_'F')"])
-# print(before["O_(4,_2,_'F',_4,_1,_'B')"])
-# print(f"{schedule["E_(1,_1,_"F")"]} >= {schedule["E_(1,_2,_"F")"]} + 1 - {before["O_(1,_1,_'F',_1,_2,_'F')"]}")
-# print(f"{schedule['E_(1,_2,_'F')']} >= {schedule['E_(1,_1,_'F')']} + 1 - {before['O_(1,_2,_'F',_1,_1,_'F')']}")
-
-
-# E_(1,_2,_'F'): 1.0
-# E_(1,_2,_'W'): 1.0
-# print(before["O_(1,_2,_'F',_1,_2,_'W')"])
-# print(before["O_(1,_2,_'W',_1,_2,_'F')"])
-
-
-print(" comp 1 vs 2")
-print(before["O_(1,_1,_'F',_1,_2,_'F')"])
-print(before["O_(1,_2,_'F',_1,_1,_'F')"])
-
-print(" comp 2 vs 3")
-print(before["O_(1,_2,_'F',_1,_3,_'F')"])
-print(before["O_(1,_3,_'F',_1,_2,_'F')"])
-
-print(" comp 3 vs 4")
-print(before["O_(1,_3,_'F',_1,_4,_'F')"])
-print(before["O_(1,_4,_'F',_1,_3,_'F')"])
-
-print(" comp 4 vs 1")
-print(before["O_(1,_4,_'F',_1,_1,_'F')"])
-print(before["O_(1,_1,_'F',_1,_4,_'F')"])
-
-print(" comp 1 vs 3")
-print(before["O_(1,_1,_'F',_1,_3,_'F')"])
-print(before["O_(1,_3,_'F',_1,_1,_'F')"])
-
-# 4 and 2
-print(" comp 2 vs 4")
-print(before["O_(1,_2,_'F',_1,_4,_'F')"])
-print(before["O_(1,_4,_'F',_1,_2,_'F')"])
-
-sorted_keys = sorted(schedule.keys(), key=lambda k: schedule[k])
-
-# Print the keys in order of their values
-for key in sorted_keys:
-    print(f"{key}: {schedule[key]}")
-    
-# Print elements of delta_M
-# for key, value in delta_M.items():
-#     print(f"delta_M[{key}] = {value}")
-
-
-
-
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
-from matplotlib.collections import PatchCollection
 
-op_colors = {
-    'F': 'blue',
-    'B': 'red',
-    'W': 'green'
-}
 
-fig, ax = plt.subplots(figsize=(12, 6))
+p = 4                   # @param GPUs
+m = 4                   # @param microbatches
+T_comm = 0.0            # @param inter-stage communication time
+gpu_mem_limit = 100     # @param GPU memory limit in GB
+M_B, M_W = 25, 10       # @param Memory usage for B and W operations in GB
 
-rectangles = []
-for key, end_time in schedule.items():
-    # Parse GPU (i), microbatch (j), and operation (c)
-    parts = key.split('_')
-    i = int(parts[1].strip('(,'))
-    j = int(parts[2].strip(',)'))
-    c = parts[3].strip("'()")
+T = {}
+for stage in range(1, p+1):
+    for mb in range(1, m+1):
+        T[(stage, mb, 'F')] = 1
+        T[(stage, mb, 'B')] = 1
+        T[(stage, mb, 'W')] = 1
+
+mdl = pulp.LpProblem("ZB_ILP_fixed_ordered", pulp.LpMinimize)
+
+S = {k: pulp.LpVariable(f"S_{k[0]}_{k[1]}_{k[2]}", lowBound=0) for k in T}
+E = {k: pulp.LpVariable(f"E_{k[0]}_{k[1]}_{k[2]}", lowBound=0) for k in T}
+
+# Objective
+Z = pulp.LpVariable("Z", lowBound=0)
+for stage in range(1, p+1):
+    mdl += Z >= E[(stage, m, 'W')] - S[(stage, 1, 'F')]
+mdl += Z
+
+# start end relation
+for k, dur in T.items():
+    mdl += E[k] >= S[k] + dur
+
+# F -> B -> W
+for stage in range(1, p+1):
+    for mb in range(1, m+1):
+        mdl += S[(stage, mb, 'B')] >= E[(stage, mb, 'F')] + T_comm
+        mdl += S[(stage, mb, 'W')] >= E[(stage, mb, 'B')] + T_comm
+
+# microbatch order
+ops = ['F','B','W']
+for stage in range(1, p+1):
+    for op in ops:
+        for j in range(2, m+1):
+            mdl += S[(stage, j, op)] >= E[(stage, j-1, op)] + T_comm
+
+# Forward dependency
+for stage in range(2, p+1):
+    for mb in range(1, m+1):
+        mdl += S[(stage, mb, 'F')] >= E[(stage-1, mb, 'F')] + T_comm
+
+# Backward dependency
+for stage in range(1, p):
+    for mb in range(1, m+1):
+        mdl += S[(stage, mb, 'B')] >= E[(stage+1, mb, 'B')] + T_comm
+
+
+# @note : No computation overlap (GPT5 solution)
+def horizon_upper_bound():
+    dmax = max(T.values())
+    return int(3 * m * dmax + 2 * (p - 1) * (dmax + T_comm) + 5)
+
+
+def precedes(a, b):
+    if a == b:
+        return 1
     
-    # print(f"GPU: {i}, Microbatch: {j}, Operation: {c}, End Time: {end_time}")
-    
-    start_time = end_time - 1 # @param
-    
-    # Create rectangle (x, y, width, height)
-    rect = patches.Rectangle(
-        (start_time, i - 0.4),  # (x, y)
-        1.0,  # width (duration)
-        0.8,  # height (GPU height)
-        facecolor=op_colors[c],
-        edgecolor='black',
-        label=f'{c}'
-    )
-    # print(f"Rectangle: {rect}")
-    rectangles.append(rect)
+    if (a, b) in y:
+        return y[(a, b)]
+    elif (b, a) in y:
+        return 1 - y[(b, a)]
+    else:
+        raise ValueError(f"No precedence relation defined for {a} and {b}")
     
     
-    ax.text(start_time + 0.5, i, f'{c}{j}', ha='center', va='center', color='white')
+
+M = 1e5 # horizon_upper_bound()
+y = {}
+for stage in range(1, p+1):
+    tasks_on_stage = [task for task in T.keys() if task[0] == stage]
+    for i, a in enumerate(tasks_on_stage):
+        for b in tasks_on_stage[i+1:]:
+            y[(a, b)] = pulp.LpVariable(f"y_{a}_{b}", lowBound=0, upBound=1, cat="Binary")
+            # y[(b, a)] = pulp.LpVariable(f"y_{b}_{a}", lowBound=0, upBound=1, cat="Binary")
+            mdl += S[a] >= E[b] - M * precedes(b, a)
+            mdl += S[b] >= E[a] - M * precedes(a, b)
+            
+            
+            # if a != b: 
+            #     mdl += y[(a, b)] + y[(b, a)] == 1
+            # else:
+            #     mdl += y[(a, b)] == 1
+            #     mdl += y[(b, a)] == 1
 
 
-pc = PatchCollection(rectangles, match_original=True)
-ax.add_collection(pc)
 
-ax.set_xlabel('Time')
-ax.set_ylabel('GPU')
-ax.set_yticks([1, 2, 3, 4])
-ax.set_yticklabels(['GPU 1', 'GPU 2', 'GPU 3', 'GPU 4'])
-ax.set_title('GPU Operation Schedule (F=Forward, B=Backward, W=Weight Update)')
-ax.grid(True, linestyle='--', alpha=0.6)
-ax.set_xlim(0, 25 + 1) # @param max_time
-ax.set_ylim(0, p+1)
 
+
+
+
+# Memory limit constraint
+delta_mem = {'F': M_B, 'B': M_W - M_B, 'W': -M_W}
+
+for stage in range(1, p+1):
+    tasks_stage = [t for t in T.keys() if t[0] == stage]
+
+    # Enforce capacity at every finish instant E[t]
+    for b in tasks_stage:
+        # Sum deltas of all tasks u whose E[a] <= E[b]
+        mem_prefix_terms = []
+        for a in tasks_stage:
+            mem_prefix_terms.append(delta_mem[a[2]] * precedes(a, b))
+
+        mdl += pulp.lpSum(mem_prefix_terms) <= gpu_mem_limit
+
+
+
+
+
+mdl.solve(pulp.PULP_CBC_CMD(msg=1, timeLimit=60*6))
+print("Status:", pulp.LpStatus[mdl.status])
+print("Objective (Z):", pulp.value(Z))
+
+schedule = defaultdict(list)
+for task in sorted(T.keys()):
+    # task = (stage, mb, op)
+    s = float(pulp.value(S[task]))
+    e = float(pulp.value(E[task]))
+    schedule[task[0]].append((s, e, task[1], task[2]))
+
+print(schedule[2])
+
+
+
+
+# Plot schedule (GPT5)
+fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(14, 8), sharex=True,
+                               gridspec_kw={'height_ratios': [2, 1]})
+
+# --- Top: Gantt chart ---
+op_colors = {'F': 'royalblue', 'B': 'crimson', 'W': 'forestgreen'}
+for stage in range(1, p+1):
+    for s, e, mb, op in sorted(schedule[stage]):
+        ax1.barh(stage, e - s, left=s, height=0.6,
+                 color=op_colors[op], edgecolor='black')
+        ax1.text(s + (e - s) / 2, stage, f"{op}{mb}",
+                 va='center', ha='center', fontsize=8, color='white')
+
+ax1.set_ylabel("GPU")
+ax1.set_yticks(range(1, p+1))
+ax1.set_ylim(0.5, p + 0.5)
+ax1.set_title("GPU Operation Schedule (F=Forward, B=Backward, W=Weight Update)")
+ax1.grid(True, linestyle='--', alpha=0.4)
 handles = [patches.Patch(color=op_colors[c], label=c) for c in op_colors]
-ax.legend(handles=handles, title='Operations')
+ax1.legend(handles=handles, title='Operations', loc='upper right')
+
+# --- Bottom: Memory usage ---
+time_points = range(horizon_upper_bound() + 1)
+for stage in range(1, p+1):
+    events = []
+    for s, e, mb, op in sorted(schedule[stage], key=lambda x: x[0]):
+        events.append((s, delta_mem[op]))
+    mem_timeline = []
+    cur_mem = 0
+    last_t = 0
+    for t in time_points:
+        while events and events[0][0] <= t:
+            _, delta = events.pop(0)
+            cur_mem += delta
+        mem_timeline.append(cur_mem)
+    ax2.plot(time_points, mem_timeline, label=f"GPU{stage}")
+
+
+ax2.set_xlabel("Time")
+ax2.set_ylabel("Memory (GB)")
+ax2.set_title("Per-GPU Memory Usage Over Time")
+ax2.grid(True, linestyle='--', alpha=0.4)
+ax2.legend()
 
 plt.tight_layout()
 plt.show()
+
