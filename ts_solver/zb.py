@@ -76,26 +76,16 @@ def precedes(a, b):
     
     
 
-M = 1e5 # horizon_upper_bound()
+M = 1e5 # horizon_upper_()bound
 y = {}
 for stage in range(1, p+1):
     tasks_on_stage = [task for task in T.keys() if task[0] == stage]
-    for i, a in enumerate(tasks_on_stage):
-        for b in tasks_on_stage[i+1:]:
-            y[(a, b)] = pulp.LpVariable(f"y_{a}_{b}", lowBound=0, upBound=1, cat="Binary")
-            # y[(b, a)] = pulp.LpVariable(f"y_{b}_{a}", lowBound=0, upBound=1, cat="Binary")
-            mdl += S[a] >= E[b] - M * precedes(b, a)
-            mdl += S[b] >= E[a] - M * precedes(a, b)
-            
-            
-            # if a != b: 
-            #     mdl += y[(a, b)] + y[(b, a)] == 1
-            # else:
-            #     mdl += y[(a, b)] == 1
-            #     mdl += y[(b, a)] == 1
-
-
-
+    for a in tasks_on_stage:
+        for b in tasks_on_stage:
+            if (a,b) not in y and (b,a) not in y:
+                y[(a, b)] = pulp.LpVariable(f"y_{a}_{b}", lowBound=0, upBound=1, cat="Binary")
+                mdl += S[a] >= E[b] - M * precedes(b, a)
+                mdl += S[b] >= E[a] - M * precedes(a, b)
 
 
 
@@ -162,7 +152,7 @@ for stage in range(1, p+1):
     events = []
     for s, e, mb, op in sorted(schedule[stage], key=lambda x: x[0]):
         events.append((s, delta_mem[op]))
-    mem_timeline = []
+    mem_timeline = [0]
     cur_mem = 0
     last_t = 0
     for t in time_points:
@@ -170,7 +160,7 @@ for stage in range(1, p+1):
             _, delta = events.pop(0)
             cur_mem += delta
         mem_timeline.append(cur_mem)
-    ax2.plot(time_points, mem_timeline, label=f"GPU{stage}")
+    ax2.plot(time_points, mem_timeline[:-1], label=f"GPU{stage}")
 
 
 ax2.set_xlabel("Time")
