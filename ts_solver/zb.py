@@ -1,4 +1,3 @@
-import itertools
 from collections import defaultdict
 import pulp
 import matplotlib.pyplot as plt
