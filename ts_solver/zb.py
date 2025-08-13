@@ -30,7 +30,7 @@ mdl += Z
 
 # start end relation
 for k, dur in T.items():
-    mdl += E[k] >= S[k] + dur
+    mdl += E[k] == S[k] + dur
 
 # F -> B -> W
 for stage in range(1, p+1):
