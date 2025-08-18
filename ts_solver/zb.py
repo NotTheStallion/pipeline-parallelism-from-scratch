@@ -4,10 +4,10 @@ import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 
 
-p = 4                   # @param GPUs
-m = 4                   # @param microbatches
+p = 3                   # @param GPUs
+m = 6                   # @param microbatches
 T_comm = 0.0            # @param inter-stage communication time
-gpu_mem_limit = 100     # @param GPU memory limit in GB
+gpu_mem_limit = 105    # @param GPU memory limit in GB
 M_B, M_W = 25, 10       # @param Memory usage for B and W operations in GB
 
 T = {}
@@ -63,6 +63,8 @@ def horizon_upper_bound():
 
 
 def precedes(a, b):
+    # Check if task a precedes task b
+    
     if a == b:
         return 1
     
@@ -82,9 +84,12 @@ for stage in range(1, p+1):
     for a in tasks_on_stage:
         for b in tasks_on_stage:
             if (a,b) not in y and (b,a) not in y:
+                # y(a,b) means a comes before b there for E(a) <= E(b)
                 y[(a, b)] = pulp.LpVariable(f"y_{a}_{b}", lowBound=0, upBound=1, cat="Binary")
-                mdl += S[a] >= E[b] - M * precedes(b, a)
-                mdl += S[b] >= E[a] - M * precedes(a, b)
+                mdl += E[a] >= E[b] + T[b] - M * precedes(a, b)
+                mdl += E[b] >= E[a] + T[a] - M * precedes(b, a)
+                # mdl += S[a] >= E[b] - M * precedes(a, b)
+                # mdl += S[b] >= E[a] - M * precedes(b, a)
 
 
 
@@ -100,6 +105,7 @@ for stage in range(1, p+1):
         # Sum deltas of all tasks u whose E[a] <= E[b]
         mem_prefix_terms = []
         for a in tasks_stage:
+            # print(f"Checking precedes relation for {a} and {b}")
             mem_prefix_terms.append(delta_mem[a[2]] * precedes(a, b))
 
         mdl += pulp.lpSum(mem_prefix_terms) <= gpu_mem_limit
