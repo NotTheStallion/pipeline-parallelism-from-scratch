@@ -169,5 +169,5 @@ ax2.grid(True, linestyle='--', alpha=0.4)
 ax2.legend()
 
 plt.tight_layout()
-plt.show()
+plt.savefig("zb.png")
 
