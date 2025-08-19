@@ -1,5 +1,6 @@
 from collections import defaultdict
 import pulp
+import os
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 
@@ -7,8 +8,8 @@ import matplotlib.patches as patches
 p = 3                   # @param GPUs
 m = 6                   # @param microbatches
 T_comm = 0.0            # @param inter-stage communication time
-gpu_mem_limit = 105    # @param GPU memory limit in GB
 M_B, M_W = 25, 10       # @param Memory usage for B and W operations in GB
+gpu_mem_limit = p*M_B+5    # @param GPU memory limit in GB
 
 T = {}
 for stage in range(1, p+1):
@@ -86,8 +87,8 @@ for stage in range(1, p+1):
             if (a,b) not in y and (b,a) not in y:
                 # y(a,b) means a comes before b there for E(a) <= E(b)
                 y[(a, b)] = pulp.LpVariable(f"y_{a}_{b}", lowBound=0, upBound=1, cat="Binary")
-                mdl += E[a] >= E[b] + T[b] - M * precedes(a, b)
-                mdl += E[b] >= E[a] + T[a] - M * precedes(b, a)
+                mdl += E[a] >= E[b] + T[a] - M * precedes(a, b)
+                mdl += E[b] >= E[a] + T[b] - M * precedes(b, a)
                 # mdl += S[a] >= E[b] - M * precedes(a, b)
                 # mdl += S[b] >= E[a] - M * precedes(b, a)
 
@@ -114,66 +115,71 @@ for stage in range(1, p+1):
 
 
 
+# Remove previous image if it exists
+if os.path.exists("zb.png"):
+    os.remove("zb.png")
+
+# Solve the problem
 mdl.solve(pulp.PULP_CBC_CMD(msg=1, timeLimit=60*6))
 print("Status:", pulp.LpStatus[mdl.status])
-print("Objective (Z):", pulp.value(Z))
 
-schedule = defaultdict(list)
-for task in sorted(T.keys()):
-    # task = (stage, mb, op)
-    s = float(pulp.value(S[task]))
-    e = float(pulp.value(E[task]))
-    schedule[task[0]].append((s, e, task[1], task[2]))
+# Check if the problem is infeasible
+if pulp.LpStatus[mdl.status] != "Optimal":
+    print("The problem is infeasible or could not be solved optimally.")
+else:
+    print("Objective (Z):", pulp.value(Z))
 
-print(schedule[2])
+    schedule = defaultdict(list)
+    for task in sorted(T.keys()):
+        # task = (stage, mb, op)
+        s = float(pulp.value(S[task]))
+        e = float(pulp.value(E[task]))
+        schedule[task[0]].append((s, e, task[1], task[2]))
 
+    print(schedule[2])
 
+    # Plot schedule
+    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(14, 8), sharex=True,
+                                   gridspec_kw={'height_ratios': [2, 1]})
 
+    # --- Top: Gantt chart ---
+    op_colors = {'F': 'royalblue', 'B': 'crimson', 'W': 'forestgreen'}
+    for stage in range(1, p+1):
+        for s, e, mb, op in sorted(schedule[stage]):
+            ax1.barh(stage, e - s, left=s, height=0.6,
+                     color=op_colors[op], edgecolor='black')
+            ax1.text(s + (e - s) / 2, stage, f"{op}{mb}",
+                     va='center', ha='center', fontsize=8, color='white')
 
-# Plot schedule (GPT5)
-fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(14, 8), sharex=True,
-                               gridspec_kw={'height_ratios': [2, 1]})
+    ax1.set_ylabel("GPU")
+    ax1.set_yticks(range(1, p+1))
+    ax1.set_ylim(0.5, p + 0.5)
+    ax1.set_title("GPU Operation Schedule (F=Forward, B=Backward, W=Weight Update)")
+    ax1.grid(True, linestyle='--', alpha=0.4)
+    handles = [patches.Patch(color=op_colors[c], label=c) for c in op_colors]
+    ax1.legend(handles=handles, title='Operations', loc='upper right')
 
-# --- Top: Gantt chart ---
-op_colors = {'F': 'royalblue', 'B': 'crimson', 'W': 'forestgreen'}
-for stage in range(1, p+1):
-    for s, e, mb, op in sorted(schedule[stage]):
-        ax1.barh(stage, e - s, left=s, height=0.6,
-                 color=op_colors[op], edgecolor='black')
-        ax1.text(s + (e - s) / 2, stage, f"{op}{mb}",
-                 va='center', ha='center', fontsize=8, color='white')
+    # --- Bottom: Memory usage ---
+    time_points = range(horizon_upper_bound() + 1)
+    for stage in range(1, p+1):
+        events = []
+        for s, e, mb, op in sorted(schedule[stage], key=lambda x: x[0]):
+            events.append((s, delta_mem[op]))
+        mem_timeline = [0]
+        cur_mem = 0
+        last_t = 0
+        for t in time_points:
+            while events and events[0][0] <= t:
+                _, delta = events.pop(0)
+                cur_mem += delta
+            mem_timeline.append(cur_mem)
+        ax2.plot(time_points, mem_timeline[:-1], label=f"GPU{stage}")
 
-ax1.set_ylabel("GPU")
-ax1.set_yticks(range(1, p+1))
-ax1.set_ylim(0.5, p + 0.5)
-ax1.set_title("GPU Operation Schedule (F=Forward, B=Backward, W=Weight Update)")
-ax1.grid(True, linestyle='--', alpha=0.4)
-handles = [patches.Patch(color=op_colors[c], label=c) for c in op_colors]
-ax1.legend(handles=handles, title='Operations', loc='upper right')
+    ax2.set_xlabel("Time")
+    ax2.set_ylabel("Memory (GB)")
+    ax2.set_title("Per-GPU Memory Usage Over Time")
+    ax2.grid(True, linestyle='--', alpha=0.4)
+    ax2.legend()
 
-# --- Bottom: Memory usage ---
-time_points = range(horizon_upper_bound() + 1)
-for stage in range(1, p+1):
-    events = []
-    for s, e, mb, op in sorted(schedule[stage], key=lambda x: x[0]):
-        events.append((s, delta_mem[op]))
-    mem_timeline = [0]
-    cur_mem = 0
-    last_t = 0
-    for t in time_points:
-        while events and events[0][0] <= t:
-            _, delta = events.pop(0)
-            cur_mem += delta
-        mem_timeline.append(cur_mem)
-    ax2.plot(time_points, mem_timeline[:-1], label=f"GPU{stage}")
-
-
-ax2.set_xlabel("Time")
-ax2.set_ylabel("Memory (GB)")
-ax2.set_title("Per-GPU Memory Usage Over Time")
-ax2.grid(True, linestyle='--', alpha=0.4)
-ax2.legend()
-
-plt.tight_layout()
-plt.savefig("zb.png")
-
+    plt.tight_layout()
+    plt.savefig("zb.png")
