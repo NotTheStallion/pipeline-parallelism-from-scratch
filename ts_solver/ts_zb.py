@@ -4,11 +4,11 @@ import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 
 
-p = 4                   # @param GPUs
-m = 4                   # @param microbatches
+p = 3                   # @param GPUs
+m = 6                   # @param microbatches
 T_comm = 0.0            # @param inter-stage communication time
-gpu_mem_limit = 100     # @param GPU memory limit in GB
 M_B, M_W = 25, 10       # @param Memory usage for B and W operations in GB
+gpu_mem_limit = p*M_B-1     # @param GPU memory limit in GB
 
 T = {}
 for stage in range(1, p+1):
@@ -25,8 +25,21 @@ E = {k: pulp.LpVariable(f"E_{k[0]}_{k[1]}_{k[2]}", lowBound=0) for k in T}
 
 # Objective
 Z = pulp.LpVariable("Z", lowBound=0)
-for stage in range(1, p+1):
-    mdl += Z >= E[(stage, m, 'W')] - S[(stage, 1, 'F_S')]
+# for stage in range(1, p+1):
+#     mdl += Z >= E[(stage, m, 'W')] - min(S[(stage, 1, 'F_S')], S[(stage, 1, 'F_T')])
+# mdl += Z
+
+
+for stage in range(1, p + 1):
+    W = pulp.LpVariable(f"W_{stage}", lowBound=0)
+
+    S1 = S[(stage, 1, 'F_S')]
+    S2 = S[(stage, 1, 'F_T')]
+
+    mdl += W <= S1
+    mdl += W <= S2
+
+    mdl += Z >= E[(stage, m, 'W')] - W
 mdl += Z
 
 # start end relation
@@ -86,8 +99,8 @@ for stage in range(1, p+1):
         for b in tasks_on_stage:
             if (a,b) not in y and (b,a) not in y:
                 y[(a, b)] = pulp.LpVariable(f"y_{a}_{b}", lowBound=0, upBound=1, cat="Binary")
-                mdl += S[a] >= E[b] - M * precedes(b, a)
-                mdl += S[b] >= E[a] - M * precedes(a, b)
+                mdl += E[a] >= E[b] + T[a] - M * precedes(a, b)
+                mdl += E[b] >= E[a] + T[b] - M * precedes(b, a)
 
 
 
@@ -111,7 +124,7 @@ for stage in range(1, p+1):
 
 
 
-mdl.solve(pulp.PULP_CBC_CMD(msg=1, timeLimit=60*6))
+mdl.solve(pulp.PULP_CBC_CMD(msg=1, timeLimit=None))
 print("Status:", pulp.LpStatus[mdl.status])
 print("Objective (Z):", pulp.value(Z))
 
@@ -172,5 +185,5 @@ ax2.grid(True, linestyle='--', alpha=0.4)
 ax2.legend()
 
 plt.tight_layout()
-plt.show()
+plt.savefig("ts_zb.png")
 
