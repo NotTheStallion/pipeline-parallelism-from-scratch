@@ -261,10 +261,10 @@ def analyze_bubble_vs_gpu_limit(p, m, T_comm, M_B, M_W, delta_mem, time_limit=60
 
 if __name__ == "__main__":
     p = 3                   # @param GPUs
-    m = 4                   # @param microbatches
+    m = 3                   # @param microbatches
     T_comm = 0.0            # @param inter-stage communication time
     M_B, M_W = 25, 10       # @param Memory usage for B and W operations in GB
-    gpu_mem_limit = p*M_B - 1   # @param GPU memory limit in GB
+    gpu_mem_limit = m*M_B -1   # @param GPU memory limit in GB
     delta_mem = {'F_S': M_B, 'F_T':0, 'B': M_W - M_B, 'W': -M_W}
     
     
@@ -284,6 +284,6 @@ if __name__ == "__main__":
     
     plot_schedule(mdl, Z, S, E, T, y, p, delta_mem, schedule)
     
-    analyze_bubble_vs_gpu_limit(p, m, T_comm, M_B, M_W, delta_mem, time_limit=60*10)
+    # analyze_bubble_vs_gpu_limit(p, m, T_comm, M_B, M_W, delta_mem, time_limit=60*10)
     
     
