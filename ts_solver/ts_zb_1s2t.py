@@ -110,7 +110,7 @@ for stage in range(1, p+1):
                 mdl += E[b] >= E[a] + T[b] - M * precedes(b, a)
 
 # ------------------------ Memory capacity -------------------
-delta_mem = {'F_S': M_B, 'F_T':M_B//2, 'B': M_W - M_B - M_B//2, 'W': -M_W}
+delta_mem = {'F_S': M_B, 'F_T':0, 'B': M_W - M_B, 'W': -M_W}
 
 for stage in range(1, p+1):
     tasks_stage = [t for t in T if t[0] == stage]
