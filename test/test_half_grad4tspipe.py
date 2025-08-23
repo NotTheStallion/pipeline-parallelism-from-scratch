@@ -43,6 +43,7 @@ if __name__ == "__main__":
             outputs = model(inputs)
             
             print(inputs.grad)
+            print(f"Outputs shape: {outputs.shape}")
             
             half_idx = outputs.shape[0] // 2
             
