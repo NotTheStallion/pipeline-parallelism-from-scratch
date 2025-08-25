@@ -5,7 +5,7 @@ import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 
 p = 3
-m = 3
+m = 2
 M = 20
 ops = ['F_S', 'F_T', 'B', 'W']
 M_B, M_W = 25, 10       # @param Memory usage for B and W operations in GB
