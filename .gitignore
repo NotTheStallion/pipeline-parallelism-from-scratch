@@ -210,3 +210,5 @@ __marimo__/
 *.sqlite
 *.nsys-rep
 *.qdstrm
+*.png
+*/elf
