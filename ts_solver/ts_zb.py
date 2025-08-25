@@ -162,7 +162,7 @@ def bubble_info(mdl, Z, S, E, T, y, p):
 
 
 
-def plot_schedule(mdl, Z, S, E, T, y, p, delta_mem, schedule):
+def plot_schedule(mdl, Z, S, E, T, y, p, m, delta_mem, schedule):
     # Plot schedule (GPT5)
     fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(14, 8), sharex=True,
                                 gridspec_kw={'height_ratios': [2, 1]})
@@ -171,9 +171,9 @@ def plot_schedule(mdl, Z, S, E, T, y, p, delta_mem, schedule):
     op_colors = {'F_S': 'royalblue', 'F_T':'orange', 'B': 'crimson', 'W': 'forestgreen'}
     for stage in range(1, p+1):
         for s, e, mb, op in sorted(schedule[stage]):
-            ax1.barh(stage, e - s, left=s, height=0.6,
+            ax1.barh(stage, (e - s) / (m / 2), left=s / (m / 2), height=0.6,
                     color=op_colors[op], edgecolor='black')
-            ax1.text(s + (e - s) / 2, stage, f"{op}{mb}",
+            ax1.text((s + (e - s) / 2) / (m / 2), stage, f"{op}{mb}",
                     va='center', ha='center', fontsize=8, color='white')
 
     ax1.set_ylabel("GPU")
@@ -189,19 +189,20 @@ def plot_schedule(mdl, Z, S, E, T, y, p, delta_mem, schedule):
     for stage in range(1, p+1):
         events = []
         for s, e, mb, op in sorted(schedule[stage], key=lambda x: x[0]):
-            events.append((s, delta_mem[op]))
+            events.append((s / (m / 2), delta_mem[op]))
         mem_timeline = [0]
         cur_mem = 0
         last_t = 0
         for t in time_points:
+            t /= (m / 2)
             while events and events[0][0] <= t:
                 _, delta = events.pop(0)
                 cur_mem += delta
             mem_timeline.append(cur_mem)
-        ax2.plot(time_points, mem_timeline[:-1], label=f"GPU{stage}")
+        ax2.plot([tp / (m / 2) for tp in time_points], mem_timeline[:-1], label=f"GPU{stage}")
 
 
-    ax2.set_xlabel("Time")
+    ax2.set_xlabel(f"Time 1->{1/(m/2)}")
     ax2.set_ylabel("Memory (GB)")
     ax2.set_title("Per-GPU Memory Usage Over Time")
     ax2.grid(True, linestyle='--', alpha=0.4)
@@ -216,9 +217,21 @@ def analyze_bubble_vs_gpu_limit(p, m, T_comm, M_B, M_W, delta_mem, time_limit=60
     gpu_limits = range(M_B, int(2 * p * M_B + 50), 5)
     bubble_ratios = []
     total_times = []
+    
+    tspipe_bubble_ratio = 4/12
+    tspipe_makespan = 12
+    tspipe_br = []
+    tspipe_ms = []
 
     for gpu_mem_limit in gpu_limits:
         mdl, Z, S, E, T, y = schedule_ts(p=p, m=m, T_comm=T_comm, gpu_mem_limit=gpu_mem_limit, delta_mem=delta_mem, time_limit=time_limit)
+        
+        if gpu_mem_limit > m*M_B:
+            tspipe_br.append(tspipe_bubble_ratio)
+            tspipe_ms.append(tspipe_makespan)
+        else:
+            tspipe_br.append(0)
+            tspipe_ms.append(0)
         
         if pulp.LpStatus[mdl.status] != "Optimal":
             bubble_ratios.append(None)
@@ -231,27 +244,38 @@ def analyze_bubble_vs_gpu_limit(p, m, T_comm, M_B, M_W, delta_mem, time_limit=60
         print(f"Total time (Z): {total_time}")
         print(f"Total bubble size: {tot_bubble_size}")
         print(f"Bubble ratio: {tot_bubble_size / (total_time * p):.2f}")
-        plot_schedule(mdl, Z, S, E, T, y, p, delta_mem, schedule)
+        plot_schedule(mdl, Z, S, E, T, y, p, m, delta_mem, schedule)
         
         bubble_ratios.append(tot_bubble_size / (total_time * p))
         total_times.append(total_time)
 
     # Plot bubble ratio vs GPU memory limit
     plt.figure(figsize=(12, 6))
+    
+    # Filter out points where tspipe_br or tspipe_ms are 0
+    valid_indices = [i for i in range(len(tspipe_br)) if tspipe_br[i] != 0]
+    valid_gpu_limits = [gpu_limits[i] for i in valid_indices]
+    valid_tspipe_br = [tspipe_br[i] for i in valid_indices]
+    valid_tspipe_ms = [tspipe_ms[i] for i in valid_indices]
+
+    # Plot bubble ratio vs GPU memory limit
     plt.subplot(1, 2, 1)
-    plt.plot(gpu_limits, bubble_ratios, marker='o', label="Bubble Ratio")
+    plt.plot(gpu_limits, bubble_ratios, marker='o', label="Zero Bubble Bubble Ratio", color="green")
+    plt.plot(valid_gpu_limits, valid_tspipe_br, linestyle='--', label="TSPipe Bubble Ratio", color="blue")
     plt.xlabel("GPU Memory Limit (GB)")
     plt.ylabel("Bubble Ratio")
     plt.title("Bubble Ratio vs GPU Memory Limit")
+    plt.ylim(0, 1)  # Set the y-axis limits for bubble ratio
     plt.grid(True, linestyle='--', alpha=0.4)
     plt.legend()
 
-    # Plot total time vs GPU memory limit
+    # Plot Makespan vs GPU memory limit
     plt.subplot(1, 2, 2)
-    plt.plot(gpu_limits, total_times, marker='o', label="Total Time", color="orange")
+    plt.plot(gpu_limits, total_times, marker='o', label="Zero Bubble Makespan", color="green")
+    plt.plot(valid_gpu_limits, valid_tspipe_ms, linestyle='--', label="TSPipe Makespan", color="blue")
     plt.xlabel("GPU Memory Limit (GB)")
-    plt.ylabel("Total Time")
-    plt.title("Total Time vs GPU Memory Limit")
+    plt.ylabel("Makespan")
+    plt.title("Makespan vs GPU Memory Limit")
     plt.grid(True, linestyle='--', alpha=0.4)
     plt.legend()
 
@@ -268,7 +292,7 @@ if __name__ == "__main__":
     delta_mem = {'F_S': M_B, 'F_T':0, 'B': M_W - M_B, 'W': -M_W}
     
     
-    mdl, Z, S, E, T, y = schedule_ts(p=p, m=m, T_comm=T_comm, gpu_mem_limit=gpu_mem_limit, delta_mem=delta_mem, time_limit=60*10)
+    mdl, Z, S, E, T, y = schedule_ts(p=p, m=m, T_comm=T_comm, gpu_mem_limit=gpu_mem_limit, delta_mem=delta_mem, time_limit=60*60*12, msg=1)
     
     
     tot_bubble_size, bubble_sizes, schedule, total_time = bubble_info(mdl, Z, S, E, T, y, p)
@@ -282,7 +306,7 @@ if __name__ == "__main__":
 
     # print(schedule[1])
     
-    plot_schedule(mdl, Z, S, E, T, y, p, delta_mem, schedule)
+    plot_schedule(mdl, Z, S, E, T, y, p, m, delta_mem, schedule)
     
     # analyze_bubble_vs_gpu_limit(p, m, T_comm, M_B, M_W, delta_mem, time_limit=60*10)
     
