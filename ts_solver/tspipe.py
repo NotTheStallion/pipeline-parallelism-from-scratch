@@ -68,18 +68,18 @@ for stage in range(1, p + 1):
         ax1.barh(stage, e - s, left=s, height=0.6,
                  color=op_colors[op], edgecolor='black')
         ax1.text(s + (e - s) / 2, stage, f"{op}{mb}",
-                 va='center', ha='center', fontsize=8, color='white')
+                 va='center', ha='center', fontsize=12, color='white')  # Increased fontsize
 
-ax1.set_ylabel("GPU")
+ax1.set_ylabel("GPU", fontsize=12)  # Increased fontsize
 ax1.set_yticks(range(1, p + 1))
 ax1.set_ylim(0.5, p + 0.5)
-ax1.set_title("GPU Operation Schedule (F_S=Forward Student, F_T=Forward Teacher, B=Backward, W=Weight Update)")
+ax1.set_title("GPU Operation Schedule (F_S=Forward Student, F_T=Forward Teacher, B=Backward, W=Weight Update)", fontsize=14)  # Increased fontsize
 ax1.grid(True, linestyle='--', alpha=0.4)
 handles = [patches.Patch(color=op_colors[c], label=c) for c in op_colors]
-ax1.legend(handles=handles, title='Operations', loc='upper right')
+ax1.legend(handles=handles, title='Operations', loc='upper right', fontsize=10, title_fontsize=12)  # Increased fontsize
 
 # --- Bottom: Memory usage ---
-time_points = range(M + 1)
+time_points = range(14 + 1)
 for stage in range(1, p + 1):
     events = []
     for s, e, mb, op in sorted(schedule[stage], key=lambda x: x[0]):
@@ -94,11 +94,11 @@ for stage in range(1, p + 1):
         mem_timeline.append(cur_mem)
     ax2.plot(time_points, mem_timeline[:-1], label=f"GPU{stage}")
 
-ax2.set_xlabel("Time")
-ax2.set_ylabel("Memory (GB)")
-ax2.set_title("Per-GPU Memory Usage Over Time")
+ax2.set_xlabel("Time", fontsize=12)  # Increased fontsize
+ax2.set_ylabel("Memory (GB)", fontsize=12)  # Increased fontsize
+ax2.set_title("Per-GPU Memory Usage Over Time", fontsize=14)  # Increased fontsize
 ax2.grid(True, linestyle='--', alpha=0.4)
-ax2.legend()
+ax2.legend(fontsize=13)  # Increased fontsize
 
 plt.tight_layout()
-plt.savefig("predef_tspipe_zb.png")
+plt.savefig("res_tspipe.png")

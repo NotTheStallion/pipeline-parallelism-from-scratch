@@ -60,16 +60,16 @@ def schedule_ts(p=3, m=3, T_comm=0.0, gpu_mem_limit=100, delta_mem=None, time_li
     # F -> B -> W
     for stage in range(1, p+1):
         for mb in range(1, m+1):
-            mdl += S[(stage, mb, 'B')] >= E[(stage, mb, 'F_S')] + T_comm
-            mdl += S[(stage, mb, 'B')] >= E[(stage, mb, 'F_T')] + T_comm
-            mdl += S[(stage, mb, 'W')] >= E[(stage, mb, 'B')] + T_comm
+            mdl += S[(stage, mb, 'B')] >= E[(stage, mb, 'F_S')]
+            mdl += S[(stage, mb, 'B')] >= E[(stage, mb, 'F_T')]
+            mdl += S[(stage, mb, 'W')] >= E[(stage, mb, 'B')]
 
     # microbatch order
     ops = ['F_S','F_T','B','W']
     for stage in range(1, p+1):
         for op in ops:
             for j in range(2, m+1):
-                mdl += S[(stage, j, op)] >= E[(stage, j-1, op)] + T_comm
+                mdl += S[(stage, j, op)] >= E[(stage, j-1, op)]
 
     # Forward dependency
     for stage in range(2, p+1):
@@ -150,7 +150,7 @@ def bubble_info(mdl, Z, S, E, T, y, p):
         )
         
         # Subtract the time spent on tasks from the total time to get idle time
-        bubble_sizes[stage] = total_time - task_time
+        bubble_sizes[stage] = total_time - task_time - 2 # @param substract two for future teacher forwards
         total_bubble_size += bubble_sizes[stage]
     
     return total_bubble_size, bubble_sizes, schedule, total_time
@@ -163,30 +163,31 @@ def bubble_info(mdl, Z, S, E, T, y, p):
 
 
 def plot_schedule(mdl, Z, S, E, T, y, p, m, delta_mem, schedule):
-    # Plot schedule (GPT5)
+    # Plot schedule (Teacher-Student)
     fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(14, 8), sharex=True,
-                                gridspec_kw={'height_ratios': [2, 1]})
+                                    gridspec_kw={'height_ratios': [2, 1]})
 
     # --- Top: Gantt chart ---
-    op_colors = {'F_S': 'royalblue', 'F_T':'orange', 'B': 'crimson', 'W': 'forestgreen'}
-    for stage in range(1, p+1):
+    op_colors = {'F_S': 'royalblue', 'F_T': 'orange', 'B': 'crimson', 'W': 'forestgreen'}
+    for stage in range(1, p + 1):
         for s, e, mb, op in sorted(schedule[stage]):
             ax1.barh(stage, (e - s) / (m / 2), left=s / (m / 2), height=0.6,
-                    color=op_colors[op], edgecolor='black')
+                     color=op_colors[op], edgecolor='black')
             ax1.text((s + (e - s) / 2) / (m / 2), stage, f"{op}{mb}",
-                    va='center', ha='center', fontsize=8, color='white')
+                     va='center', ha='center', fontsize=12, color='white')  # Increased fontsize
 
-    ax1.set_ylabel("GPU")
-    ax1.set_yticks(range(1, p+1))
+    ax1.set_ylabel("GPU", fontsize=12)  # Increased fontsize
+    ax1.set_yticks(range(1, p + 1))
     ax1.set_ylim(0.5, p + 0.5)
-    ax1.set_title("GPU Operation Schedule (F=Forward, B=Backward, W=Weight Update)")
+    ax1.set_title("GPU Operation Schedule (F=Forward, B=Backward, W=Weight Update)", fontsize=14)  # Increased fontsize
     ax1.grid(True, linestyle='--', alpha=0.4)
     handles = [patches.Patch(color=op_colors[c], label=c) for c in op_colors]
-    ax1.legend(handles=handles, title='Operations', loc='upper right')
+    ax1.legend(handles=handles, title='Operations', loc='upper right', fontsize=10, title_fontsize=12)  # Increased fontsize
 
     # --- Bottom: Memory usage ---
     time_points = range(int(pulp.value(Z)) + 5)
-    for stage in range(1, p+1):
+    time_points = range(15)
+    for stage in range(1, p + 1):
         events = []
         for s, e, mb, op in sorted(schedule[stage], key=lambda x: x[0]):
             events.append((s / (m / 2), delta_mem[op]))
@@ -199,14 +200,14 @@ def plot_schedule(mdl, Z, S, E, T, y, p, m, delta_mem, schedule):
                 _, delta = events.pop(0)
                 cur_mem += delta
             mem_timeline.append(cur_mem)
-        ax2.plot([tp / (m / 2) for tp in time_points], mem_timeline[:-1], label=f"GPU{stage}")
+        scaled_mem_timeline = [mem / (m / 2) for mem in mem_timeline[:-1]]
+        ax2.plot([tp / (m / 2) for tp in time_points], scaled_mem_timeline, label=f"GPU{stage}")
 
-
-    ax2.set_xlabel(f"Time 1->{1/(m/2)}")
-    ax2.set_ylabel("Memory (GB)")
-    ax2.set_title("Per-GPU Memory Usage Over Time")
+    ax2.set_xlabel(f"Time [{1/(m/2):.2f} per op]", fontsize=12)  # Increased fontsize
+    ax2.set_ylabel("Memory (GB, scaled)", fontsize=12)  # Increased fontsize
+    ax2.set_title("Per-GPU Memory Usage Over Time (Scaled)", fontsize=14)  # Increased fontsize
     ax2.grid(True, linestyle='--', alpha=0.4)
-    ax2.legend()
+    ax2.legend(fontsize=13)  # Increased fontsize
 
     plt.tight_layout()
     plt.savefig("ts_zb.png")
@@ -218,8 +219,8 @@ def analyze_bubble_vs_gpu_limit(p, m, T_comm, M_B, M_W, delta_mem, time_limit=60
     bubble_ratios = []
     total_times = []
     
-    tspipe_bubble_ratio = 4/12
-    tspipe_makespan = 12
+    tspipe_bubble_ratio = 2/12
+    tspipe_makespan = 12-2
     tspipe_br = []
     tspipe_ms = []
 
@@ -247,7 +248,7 @@ def analyze_bubble_vs_gpu_limit(p, m, T_comm, M_B, M_W, delta_mem, time_limit=60
         plot_schedule(mdl, Z, S, E, T, y, p, m, delta_mem, schedule)
         
         bubble_ratios.append(tot_bubble_size / (total_time * p))
-        total_times.append(total_time)
+        total_times.append(total_time-2)
 
     # Plot bubble ratio vs GPU memory limit
     plt.figure(figsize=(12, 6))
@@ -271,11 +272,12 @@ def analyze_bubble_vs_gpu_limit(p, m, T_comm, M_B, M_W, delta_mem, time_limit=60
 
     # Plot Makespan vs GPU memory limit
     plt.subplot(1, 2, 2)
-    plt.plot(gpu_limits, total_times, marker='o', label="Zero Bubble Makespan", color="green")
+    plt.plot(gpu_limits, total_times, marker='o', label="ZBTS Makespan", color="green")
     plt.plot(valid_gpu_limits, valid_tspipe_ms, linestyle='--', label="TSPipe Makespan", color="blue")
     plt.xlabel("GPU Memory Limit (GB)")
     plt.ylabel("Makespan")
     plt.title("Makespan vs GPU Memory Limit")
+    plt.ylim(m*4, 14)  # Set the y-axis limits for makespan
     plt.grid(True, linestyle='--', alpha=0.4)
     plt.legend()
 
@@ -288,7 +290,7 @@ if __name__ == "__main__":
     m = 2                   # @param microbatches
     T_comm = 0.0            # @param inter-stage communication time
     M_B, M_W = 25, 10       # @param Memory usage for B and W operations in GB
-    gpu_mem_limit = p*M_B   # @param GPU memory limit in GB
+    gpu_mem_limit = m*M_B   # @param GPU memory limit in GB
     delta_mem = {'F_S': M_B, 'F_T':0, 'B': M_W - M_B, 'W': -M_W}
     
     
@@ -306,8 +308,8 @@ if __name__ == "__main__":
 
     # print(schedule[1])
     
-    plot_schedule(mdl, Z, S, E, T, y, p, m, delta_mem, schedule)
+    # plot_schedule(mdl, Z, S, E, T, y, p, m, delta_mem, schedule)
     
-    # analyze_bubble_vs_gpu_limit(p, m, T_comm, M_B, M_W, delta_mem, time_limit=60*10)
+    analyze_bubble_vs_gpu_limit(p, m, T_comm, M_B, M_W, delta_mem, time_limit=60*10)
     
     

@@ -24,7 +24,7 @@ for stage in range(1, p+1):
 
 # Next batch: teacher forwards only
 for stage in range(1, p+1):
-    for mb in range(m+1, times*m+1):
+    for mb in range(m+1, times+m+1):
         T[(stage, mb, 'F_T')] = 1
 
 def has(stage, mb, op):
@@ -47,7 +47,7 @@ for stage in range(1, p+1):
     # max W_m and F_T_2m
     W1 = pulp.LpVariable(f"W1_{stage}", lowBound=0)
     mdl += W1 >= E[(stage, m, 'W')]
-    mdl += W1 >= E[(stage, times*m, 'F_T')]
+    mdl += W1 >= E[(stage, times+m, 'F_T')]
     # last W of first batch is at mb = m
     mdl += Z >= W1 - W0
 mdl += Z
@@ -67,7 +67,7 @@ for stage in range(1, p+1):
 # Microbatch order per op on each stage
 for stage in range(1, p+1):
     # F_T must be ordered across 1..2m (when both exist)
-    for j in range(2, times*m+1):
+    for j in range(2, times+m+1):
         if has(stage, j, 'F_T') and has(stage, j-1, 'F_T'):
             mdl += S[(stage, j, 'F_T')] >= E[(stage, j-1, 'F_T')] + T_comm
     # F_S, B, W are only for first batch (1..m)
@@ -81,7 +81,7 @@ for stage in range(2, p+1):
     for mb in range(1, m+1):
         mdl += S[(stage, mb, 'F_S')] >= E[(stage-1, mb, 'F_S')] + T_comm
     # F_T flows for both batches (guard existence)
-    for mb in range(1, times*m+1):
+    for mb in range(1, times+m+1):
         if has(stage-1, mb, 'F_T') and has(stage, mb, 'F_T'):
             mdl += S[(stage, mb, 'F_T')] >= E[(stage-1, mb, 'F_T')] + T_comm
 
@@ -151,16 +151,15 @@ for stage in range(1, p+1):
         ax1.barh(stage, e - s, left=s, height=0.6,
                  color=op_colors[op], edgecolor='black')
         ax1.text(s + (e - s)/2, stage, f"{op}{mb}", va='center', ha='center',
-                 fontsize=8, color='white')
-ax1.set_ylabel("GPU")
+                 fontsize=12, color='white')  # Increased fontsize
+ax1.set_ylabel("GPU", fontsize=12)  # Increased fontsize
 ax1.set_yticks(range(1, p+1))
 ax1.set_ylim(0.5, p + 0.5)
-ax1.set_title("GPU Operation Schedule (F=Forward, B=Backward, W=Weight Update)")
+ax1.set_title("GPU Operation Schedule (F=Forward, B=Backward, W=Weight Update)", fontsize=14)  # Increased fontsize
 ax1.grid(True, linestyle='--', alpha=0.4)
 handles = [patches.Patch(color=op_colors[c]) for c in op_colors]
 labels = list(op_colors.keys())
-ax1.legend(handles, labels, title='Operations', loc='upper right')
-
+ax1.legend(handles, labels, title='Operations', loc='upper right', fontsize=10, title_fontsize=12)  # Increased fontsize
 
 # Memory (event-based from starts; for visualization only)
 def horizon_upper_bound():
@@ -168,22 +167,23 @@ def horizon_upper_bound():
     return int(3 * m * dmax + 2 * (p - 1) * (dmax + T_comm) + 5)
 
 time_points = range(horizon_upper_bound() + 1)
+time_points = range(15)  # Adjusted for better visualization
 for stage in range(1, p+1):
     events = sorted((s, op) for s, e, mb, op in schedule[stage])
     mem_timeline = []
     cur_mem = 0
     idx = 0
     for t in time_points:
-        while idx < len(events) and events[idx][0] <= t:
+        while idx < len(events) and events[idx][0] < t:  # Adjusted to "< t" for alignment
             cur_mem += delta_mem[events[idx][1]]
             idx += 1
         mem_timeline.append(cur_mem)
     ax2.plot(time_points, mem_timeline, label=f"GPU{stage}")
 
-ax2.set_xlabel("Time")
-ax2.set_ylabel("Memory (GB)")
-ax2.set_title("Per-GPU Memory Usage Over Time")
+ax2.set_xlabel("Time", fontsize=12)  # Increased fontsize
+ax2.set_ylabel("Memory (GB)", fontsize=12)  # Increased fontsize
+ax2.set_title("Per-GPU Memory Usage Over Time", fontsize=14)  # Increased fontsize
 ax2.grid(True, linestyle='--', alpha=0.4)
-ax2.legend()
+ax2.legend(fontsize=13)  # Increased fontsize
 plt.tight_layout()
-plt.savefig("ts_zb_1s2t.png")
+plt.savefig("ts_zb_3.png")
