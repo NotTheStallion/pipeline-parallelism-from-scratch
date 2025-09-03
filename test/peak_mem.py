@@ -19,17 +19,17 @@ peak_stage2 = [peak_memory(2, m, M_B_batch, M_W_batch, p) for m in microbatches]
 peak_stage3 = [peak_memory(3, m, M_B_batch, M_W_batch, p) for m in microbatches]
 
 # Plotting
-plt.figure(figsize=(8, 5))
+plt.figure(figsize=(15, 5))
 plt.plot(microbatches, peak_stage1, label='Stage 1', linewidth=2)
 plt.plot(microbatches, peak_stage2, label='Stage 2', linewidth=2)
 plt.plot(microbatches, peak_stage3, label='Stage 3', linewidth=2)
 
 # Add legend with memory info
-plt.legend(title=f"$M_B^{{batch}}={M_B_batch},\ M_W^{{batch}}={M_W_batch}$")
+plt.legend(title=f"$M_B^{{batch}}={M_B_batch},\ M_W^{{batch}}={M_W_batch}$", fontsize=15, title_fontsize=16)
 
-plt.title("Peak Memory vs Microbatches (p=3)")
-plt.xlabel("Number of microbatches (m)")
-plt.ylabel("Peak Memory")
+plt.title("Peak Memory vs Microbatches (p=3)", fontsize=16)
+plt.xlabel("Number of microbatches (m)", fontsize=14)
+plt.ylabel("Peak Memory", fontsize=14)
 plt.grid(True, linestyle="--", alpha=0.7)
 plt.savefig("peak_memory_plot_p3.png")
 plt.show()
