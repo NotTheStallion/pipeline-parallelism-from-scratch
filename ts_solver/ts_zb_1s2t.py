@@ -10,7 +10,7 @@ T_comm = 0.0             # inter-stage comm time
 M_B, M_W = 25, 10        # memory deltas (GB)
 gpu_mem_limit = p*M_B  # GPU memory limit (GB)
 
-times = 3
+times = 2
 
 # ------------------------ Tasks -----------------------------
 # T[(stage, mb, op)] = duration
@@ -41,7 +41,7 @@ for stage in range(1, p+1):
     # earliest of F_S1 and F_T1 (first-batch only)
     W0 = pulp.LpVariable(f"W_{stage}", lowBound=0)
     mdl += W0 <= S[(stage, 1, 'F_S')]
-    mdl += W0 <= S[(stage, 1, 'F_T')]
+    mdl += W0 <= S[(stage, 3, 'F_T')]
     
     
     # max W_m and F_T_2m

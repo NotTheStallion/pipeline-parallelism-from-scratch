@@ -43,6 +43,16 @@ for stage in range(1, p + 1):
     for mb in range(2, m + 1):
         S[(stage, mb, 'B')] = S[(stage, mb-1, 'B')] + 1
         # S[(stage, mb, 'B')] = S[(stage, mb, 'B')] + 1
+        
+        
+S[(p, 3, 'F_T')] = S[(p, 4, 'B')] + 1
+S[(p, 4, 'F_T')] = S[(p, 3, 'F_T')] + 1
+
+S[(p-1, 3, 'F_T')] = S[(p-1, 2, 'F_S')] + 1
+S[(p-1, 4, 'F_T')] = S[(p-1, 3, 'F_T')] + 1
+
+S[(p-2, 3, 'F_T')] = S[(p-2, 2, 'F_S')] + 1
+S[(p-2, 4, 'F_T')] = S[(p-2, 3, 'F_T')] + 1
 
 schedule = defaultdict(list)
 for task in sorted(T.keys()):
