@@ -461,8 +461,8 @@ if __name__ == "__main__":
 
     # print(schedule[1])
     
-    # plot_schedule(mdl, Z, S, E, T, y, p, m, delta_mem, schedule)
+    plot_schedule(mdl, Z, S, E, T, y, p, m, delta_mem, schedule)
     
-    analyze_bubble_vs_gpu_limit(p, m, T_comm, M_B, M_W, delta_mem, time_limit=60*10)
+    # analyze_bubble_vs_gpu_limit(p, m, T_comm, M_B, M_W, delta_mem, time_limit=60*10)
     
     
