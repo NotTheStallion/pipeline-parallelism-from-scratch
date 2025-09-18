@@ -7,6 +7,9 @@ gpipe:
 tspipe:
 	torchrun --nproc-per-node 4 standard-kd.py
 
+zbts:
+	torchrun --nproc-per-node 4 zb.py
+
 test_gpipe:
 	torchrun --nproc-per-node 4 test_gpipe.py
 
@@ -18,6 +21,9 @@ prof:
 
 prof_ts:
 	nsys profile --sample process-tree --stats false --trace nvtx --force-overwrite true --output profile.nsys-rep torchrun --nproc-per-node 4 standard-kd.py
+
+prof_zb:
+	nsys profile --sample process-tree --stats false --trace nvtx --force-overwrite true --output profile.nsys-rep torchrun --nproc-per-node 4 zb.py
 
 .PHONY: prof
 
