@@ -13,6 +13,7 @@ class LinearDX(torch.autograd.Function):
 		# We need to pass both weight/bias AND linear to backward, because
 		# We store the input in linear.last_input, with a side-effect,
 		# but if we don't have input tensors that require grad, autograd will not automatically mark the output as needing grad.
+		# * ctx is the backward context that can be used to stash information for backward computation
 		ctx.linear = linear
 		linear.last_input = input.detach()
 		ctx.save_for_backward(
