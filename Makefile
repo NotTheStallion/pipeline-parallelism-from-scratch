@@ -29,3 +29,6 @@ prof_zb:
 
 ui:
 	nsys-ui profile.nsys-rep
+
+clean:
+	rm *.png
