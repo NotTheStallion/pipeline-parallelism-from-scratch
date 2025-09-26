@@ -96,16 +96,16 @@ for task in sorted(T.keys()):
 print(schedule[2])
 
 # Plot schedule (Teacher-Student)
-fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(14, 8), sharex=True,
+fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(25, 8), sharex=True,
                                 gridspec_kw={'height_ratios': [2, 1]})
 
 # --- Top: Gantt chart ---
 op_colors = {'F_S': 'royalblue', 'F_T': 'orange', 'B': 'crimson', 'W': 'forestgreen'}
 for stage in range(1, p + 1):
     for s, e, mb, op in sorted(schedule[stage]):
-        ax1.barh(stage, e - s, left=s, height=0.6,
+        ax1.barh(stage, e - s, left=s, height=1,
                  color=op_colors[op], edgecolor='black')
-        if op in []:
+        if op in ["B"]:
             ax1.text(s + (e - s) / 2, stage, f"{op}{((mb-1)//2)+1}",
                 va='center', ha='center', fontsize=12, color='white')  # Increased fontsize
         else:
@@ -116,12 +116,18 @@ ax1.set_ylabel("GPU", fontsize=12)  # Increased fontsize
 ax1.set_yticks(range(1, p + 1))
 ax1.set_ylim(0.5, p + 0.5)
 ax1.set_title("GPU Operation Schedule (F_S=Forward Student, F_T=Forward Teacher, B=Backward, W=Weight Update)", fontsize=14)  # Increased fontsize
-ax1.grid(True, linestyle='--', alpha=0.4)
+# ax1.grid(True, linestyle='--', alpha=0.4)
 handles = [patches.Patch(color=op_colors[c], label=c) for c in op_colors]
 ax1.legend(handles=handles, title='Operations', loc='upper right', fontsize=10, title_fontsize=12)  # Increased fontsize
 
+# Draw vertical and horizontal lines at each increment of 1
+for t in range(0, 46):
+    ax1.axvline(t, color='gray', linestyle='--', alpha=0.3)
+for gpu in range(1, p + 1):
+    ax1.axhline(gpu - 0.5, color='gray', linestyle='--', alpha=0.3)
+
 # --- Bottom: Memory usage ---
-time_points = range(50 + 1)
+time_points = range(45 + 1)
 for stage in range(1, p + 1):
     events = []
     for s, e, mb, op in sorted(schedule[stage], key=lambda x: x[0]):
@@ -141,6 +147,12 @@ ax2.set_ylabel("Memory (GB)", fontsize=12)  # Increased fontsize
 ax2.set_title("Per-GPU Memory Usage Over Time", fontsize=14)  # Increased fontsize
 ax2.grid(True, linestyle='--', alpha=0.4)
 ax2.legend(fontsize=13)  # Increased fontsize
+
+# Draw vertical and horizontal lines at each increment of 1
+# for t in range(0, 46):
+#     ax2.axvline(t, color='gray', linestyle='--', alpha=0.3)
+# for mem in range(0, int(max(mem_timeline)) + 1):
+#     ax2.axhline(mem, color='gray', linestyle='--', alpha=0.3)
 
 plt.tight_layout()
 plt.savefig("res_tspipe.png")
