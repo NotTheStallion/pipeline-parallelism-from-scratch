@@ -4,7 +4,7 @@ from collections import defaultdict
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 
-p = 4
+p = 24
 m = p-1
 M = 20
 ops = ['F_S', 'F_T', 'B', 'W']
@@ -107,8 +107,8 @@ for stage in range(1, p + 1):
     for s, e, mb, op in sorted(schedule[stage]):
         ax1.barh(stage, e - s, left=s, height=0.6,
                  color=op_colors[op], edgecolor='black')
-        ax1.text(s + (e - s) / 2, stage, f"{op}{mb}",
-                 va='center', ha='center', fontsize=12, color='white')
+        # ax1.text(s + (e - s) / 2, stage, f"{op}{mb}",
+        #          va='center', ha='center', fontsize=12, color='white')
 
 ax1.set_ylabel("GPU")
 ax1.set_yticks(range(1, p + 1))
