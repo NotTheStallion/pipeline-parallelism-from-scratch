@@ -4,52 +4,69 @@ from collections import defaultdict
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 
-p = 24
+p = 8
 m = p-1
 M = 20
 ops = ['F_S', 'F_T', 'B', 'W']
-M_B, M_W = 25, 10       # @param Memory usage for B and W operations in GB
-delta_mem = {'F_S': M_B, 'F_T': 0, 'B': M_W - M_B, 'W': -M_W}
+M_B, M_W = 25, 10       # Memory usage for B and W operations in GB
+M_BBatch, M_WBatch = 50, 20
+T_total = 10
+alpha = 1
 
+# Memory scaling per microbatch
+delta_mem = {
+    'F_S': M_BBatch / m,
+    'F_T': 0,
+    'B': (M_WBatch / m) - M_BBatch / m,
+    'W': -M_WBatch / m
+}
+
+# Time scaling per microbatch
 T = {}
 for stage in range(1, p + 1):
     for mb in range(1, m + 1):
         for op in ops:
-            T[(stage, mb, op)] = 1
+            if op == 'F_T':
+                T[(stage, mb, op)] = alpha * (T_total / m)
+            else:
+                T[(stage, mb, op)] = T_total / m
 
-
-# additional teacher forwards
+# Additional teacher forwards for bubble fill
 for stage in range(1, p + 1):
-    for mb in range(m + 1, 2*m + 1):
-        T[(stage, mb, 'F_T')] = 1
+    for mb in range(m + 1, 2 * m + 1):
+        T[(stage, mb, 'F_T')] = alpha * (T_total / m)
+
+
+print(f"Time per microbatch: {T_total/m}, alpha: {alpha}")
+print(f"Memory per microbatch: F_S {delta_mem['F_S']}, B {delta_mem['B']}, W {delta_mem['W']}")
 
 S = {}
 
 # p-1 warmup teacher forwards
 
 for mb in range(1, m + 1):
-    S[(1, mb, 'F_T')] = mb - 1
+    S[(1, mb, 'F_T')] = (mb - 1) * T[(1, mb, 'F_T')]
 
 for stage in range(2, p+1):
     for mb in range(1, m + 1):
-        S[(stage, mb, 'F_T')] = S[(stage - 1, mb, 'F_T')] + 1
+        S[(stage, mb, 'F_T')] = S[(stage - 1, mb, 'F_T')] + T[(stage - 1, mb, 'F_T')]
         
 # interleaved student forwards
 
 for stage in range(1, p + 1):
-    S[(stage, 1, 'F_S')] = S[(stage, m-1, 'F_T')] + 1 + 1
+    S[(stage, 1, 'F_S')] = S[(stage, m, 'F_T')] + T[(stage, m, 'F_T')] #+ T[(stage, m-1, 'B')]
     for mb in range(2, m + 1):
-        S[(stage, mb, 'F_S')] = S[(stage, mb - 1, 'F_S')] + 1 + 1
+        S[(stage, mb, 'F_S')] = S[(stage, mb - 1, 'F_S')] + T[(stage, mb - 1, 'F_S')] + T[(stage, mb - 1, 'B')]
 
 # interleaved backwards
 
 for mb in range(1, m + 1):
-    S[(p, mb, 'B')] = S[(p, mb, 'F_S')] + 1
+    S[(p, mb, 'B')] = S[(p, mb, 'F_S')] + T[(p, mb, 'F_S')]
 
 for stage in range(p - 1, 0, -1):
     for mb in range(1, m + 1):
-        S[(stage, mb, 'B')] = S[(stage + 1, mb, 'B')] + 1
-        
+        S[(stage, mb, 'B')] = S[(stage + 1, mb, 'B')] + T[(stage + 1, mb, 'B')]
+
 # Schedule W passes after B passes, shifting if needed
 for stage in range(1, p + 1):
     for mb in range(1, m + 1):
@@ -61,7 +78,7 @@ for stage in range(1, p + 1):
             for mb2 in range(1, m + 1)
             for op in ops
         ):
-            w_start += 1
+            w_start += T[(stage, mb, 'W')]
         S[(stage, mb, 'W')] = w_start
     
 
@@ -77,7 +94,7 @@ for stage in range(1, p + 1):
             for mb2 in range(1, 2*m + 1)
             for op in ops
         ):
-            f_start += 1
+            f_start += T[(stage, mb, 'F_T')]
         S[(stage, mb, 'F_T')] = f_start
 
 
@@ -107,8 +124,8 @@ for stage in range(1, p + 1):
     for s, e, mb, op in sorted(schedule[stage]):
         ax1.barh(stage, e - s, left=s, height=0.6,
                  color=op_colors[op], edgecolor='black')
-        # ax1.text(s + (e - s) / 2, stage, f"{op}{mb}",
-        #          va='center', ha='center', fontsize=12, color='white')
+        ax1.text(s + (e - s) / 2, stage, f"{op}{mb}",
+                 va='center', ha='center', fontsize=12, color='white')
 
 ax1.set_ylabel("GPU")
 ax1.set_yticks(range(1, p + 1))
@@ -120,7 +137,7 @@ ax1.legend(handles=handles, title='Operations', loc='upper right')
 
 # --- Bottom: Memory usage ---
 time_points = range(M + 1)
-time_points = range(14 + 1)
+time_points = range(60 + 1)
 for stage in range(1, p + 1):
     events = []
     for s, e, mb, op in sorted(schedule[stage], key=lambda x: x[0]):

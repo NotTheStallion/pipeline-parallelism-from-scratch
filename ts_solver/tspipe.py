@@ -6,37 +6,45 @@ import matplotlib.patches as patches
 
 p = 8
 m = 2*(p-1)
+num_micorbatches = p-1
 M = 20
 ops = ['F_S', 'F_T', 'B', 'W']
 M_B, M_W = 25, 10       # @param Memory usage for B and W operations in GB
 M_BBatch, M_WBatch = 50, 20
-delta_mem = {'F_S': M_BBatch/(m//2) + M_WBatch/(m//2), 'F_T': 0, 'B': (- M_BBatch/(m//2) - M_WBatch/(m//2)) /2, 'W': -M_W}
+T_total = 10
+alpha = 1
+delta_mem = {'F_S': M_BBatch/(num_micorbatches//2) + M_WBatch/(num_micorbatches//2), 'F_T': 0, 'B': (- M_BBatch/(num_micorbatches//2) - M_WBatch/(num_micorbatches//2)) /2, 'W': 0}
+
+print(f"Time per microbatch: {T_total/num_micorbatches}, alpha: {alpha}")
+print(f"Memory per microbatch: F_S {delta_mem['F_S']}, B {delta_mem['B']}, W {delta_mem['W']}")
 
 T = {}
 for stage in range(1, p + 1):
     for mb in range(1, m + 1):
-        for op in ops:
-            T[(stage, mb, op)] = 1
+        T[(stage, mb, 'F_S')] = T_total / num_micorbatches
+        T[(stage, mb, 'F_T')] = alpha * T[(stage, mb, 'F_S')]
+        T[(stage, mb, 'B')] = T_total / num_micorbatches
+        T[(stage, mb, 'W')] = T_total / num_micorbatches
 
 S = {}
 
 
 # Last stage
-S[(p, 1, 'F_T')] = p-1
+S[(p, 1, 'F_T')] = (p-1)*T[(p, 1, 'F_T')]
 for mb in range(2, (m//2) + 1):
-    S[(p, mb, 'F_T')] = S[(p, mb-1, 'F_T')] + 1
+    S[(p, mb, 'F_T')] = S[(p, mb-1, 'F_T')] + T[(p, mb-1, 'F_T')]
 
-S[(p, 1, 'F_S')] = S[(p, m//2, 'F_T')] + 1
+S[(p, 1, 'F_S')] = S[(p, m//2, 'F_T')] + T[(p, m//2, 'F_T')]
 for mb in range(2, m//2 + 1):
-    S[(p, mb, 'F_S')] = S[(p, mb-1, 'F_S')] + 1
+    S[(p, mb, 'F_S')] = S[(p, mb-1, 'F_S')] + T[(p, mb-1, 'F_S')]
 
-S[(p, 1, 'B')] = S[(p, m//2, 'F_S')] + 1
+S[(p, 1, 'B')] = S[(p, m//2, 'F_S')] + T[(p, m//2, 'F_S')]
 for mb in range(2, m + 1):
-    S[(p, mb, 'B')] = S[(p, mb-1, 'B')] + 1
+    S[(p, mb, 'B')] = S[(p, mb-1, 'B')] + T[(p, mb-1, 'B')]
 
-S[(p, (m//2)+1, 'F_T')] = S[(p, m, 'B')] + 1
+S[(p, (m//2)+1, 'F_T')] = S[(p, m, 'B')] + T[(p, m, 'B')]
 for mb in range((m//2)+2, m + 1):
-    S[(p, mb, 'F_T')] = S[(p, mb-1, 'F_T')] + 1
+    S[(p, mb, 'F_T')] = S[(p, mb-1, 'F_T')] + T[(p, mb-1, 'F_T')]
 
 
 
@@ -45,42 +53,45 @@ stage = p-1
 
 for stage in range(p-1, 1, -1):
 
-    S[(stage, 1, 'F_T')] = stage-1
+    S[(stage, 1, 'F_T')] = (stage-1)*T[(stage, 1, 'F_T')]
     for mb in range(2, m//2 + 1):
-        S[(stage, mb, 'F_T')] = S[(stage, mb-1, 'F_T')] + 1
+        S[(stage, mb, 'F_T')] = S[(stage, mb-1, 'F_T')] + T[(stage, mb-1, 'F_T')]
 
-    S[(stage, 1, 'F_S')] = S[(stage, m//2, 'F_T')] + 1
+    S[(stage, 1, 'F_S')] = S[(stage, m//2, 'F_T')] + T[(stage, m//2, 'F_T')]
     for mb in range(2, m//2 + 1):
-        S[(stage, mb, 'F_S')] = S[(stage, mb-1, 'F_S')] + 1
+        S[(stage, mb, 'F_S')] = S[(stage, mb-1, 'F_S')] + T[(stage, mb-1, 'F_S')]
 
-    S[(stage, 1, 'B')] = S[(stage+1, 1, 'B')] + 1
+    S[(stage, 1, 'B')] = S[(stage+1, 1, 'B')] + T[(stage+1, 1, 'B')]
     for mb in range(2, m + 1):
-        S[(stage, mb, 'B')] = S[(stage, mb-1, 'B')] + 1
+        S[(stage, mb, 'B')] = S[(stage, mb-1, 'B')] + T[(stage, mb-1, 'B')]
 
-    S[(stage, (m//2)+1, 'F_T')] = S[(stage, m//2, 'F_S')] + 1
+    S[(stage, (m//2)+1, 'F_T')] = S[(stage, m//2, 'F_S')] + T[(stage, m//2, 'F_S')]
     for mb in range((m//2)+2, m + 1):
-        S[(stage, mb, 'F_T')] = S[(stage, mb-1, 'F_T')] + 1
+        S[(stage, mb, 'F_T')] = S[(stage, mb-1, 'F_T')] + T[(stage, mb-1, 'F_T')]
         if S[(stage, mb, 'F_T')] == S[(stage, 1, 'B')]:
-            S[(stage, mb, 'F_T')] += 2*(p-1)
+            S[(stage, mb, 'F_T')] += 2*(p-1)*T[(stage, mb, 'F_T')]
 
 
 
 # First stage
 S[(1, 1, 'F_T')] = 0
 for mb in range(2, m//2 + 1):
-    S[(1, mb, 'F_T')] = S[(1, mb-1, 'F_T')] + 1
+    S[(1, mb, 'F_T')] = S[(1, mb-1, 'F_T')] + T[(1, mb-1, 'F_T')]
 
-S[(1, 1, 'F_S')] = S[(1, m//2, 'F_T')] + 1
+S[(1, 1, 'F_S')] = S[(1, m//2, 'F_T')] + T[(1, m//2, 'F_T')]
 for mb in range(2, m//2 + 1):
-    S[(1, mb, 'F_S')] = S[(1, mb-1, 'F_S')] + 1
+    S[(1, mb, 'F_S')] = S[(1, mb-1, 'F_S')] + T[(1, mb-1, 'F_S')]
 
-S[(1, 1, 'B')] = S[(1, m//2, 'F_S')] + 1 + (p-1)*2
+S[(1, 1, 'B')] = S[(1, m//2, 'F_S')] + T[(1, m//2, 'F_S')] + (p-1)*2*T[(1, 1, 'B')]
 for mb in range(2, m + 1):
-    S[(1, mb, 'B')] = S[(1, mb-1, 'B')] + 1
+    S[(1, mb, 'B')] = S[(1, mb-1, 'B')] + T[(1, mb-1, 'B')]
 
-S[(1, (m//2)+1, 'F_T')] = S[(1, m//2, 'F_S')] + 1
+S[(1, (m//2)+1, 'F_T')] = S[(1, m//2, 'F_S')] + T[(1, m//2, 'F_S')]
 for mb in range((m//2)+2, m + 1):
-    S[(1, mb, 'F_T')] = S[(1, mb-1, 'F_T')] + 1
+    S[(1, mb, 'F_T')] = S[(1, mb-1, 'F_T')] + T[(1, mb-1, 'F_T')]
+
+
+
 
 schedule = defaultdict(list)
 for task in sorted(T.keys()):
@@ -127,7 +138,7 @@ for gpu in range(1, p + 1):
     ax1.axhline(gpu - 0.5, color='gray', linestyle='--', alpha=0.3)
 
 # --- Bottom: Memory usage ---
-time_points = range(45 + 1)
+time_points = range(60 + 1)
 for stage in range(1, p + 1):
     events = []
     for s, e, mb, op in sorted(schedule[stage], key=lambda x: x[0]):
