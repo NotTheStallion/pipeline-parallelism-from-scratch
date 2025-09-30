@@ -32,6 +32,8 @@ def special(p=3, m=2, T_comm=0.0, gpu_mem_limit=None, delta_mem=None,
 
     # local memory deltas (kept from your original)
     M_B, M_W = 25, 10
+    alpha = 2
+    times = p-1
 
     # default gpu_mem_limit matches the previous special() default if not provided
     if gpu_mem_limit is None:
@@ -49,7 +51,7 @@ def special(p=3, m=2, T_comm=0.0, gpu_mem_limit=None, delta_mem=None,
     # next-iteration teacher forwards only
     for stage in range(1, p + 1):
         for mb in range(m + 1, m + times + 1):
-            T[(stage, mb, 'F_T')] = 1
+            T[(stage, mb, 'F_T')] = alpha * T[(1, 1, 'F_S')]
 
     def has(stage, mb, op):
         return (stage, mb, op) in T
@@ -64,17 +66,26 @@ def special(p=3, m=2, T_comm=0.0, gpu_mem_limit=None, delta_mem=None,
     # ------------------------ Objective (match schedule_ts style) ----
     for stage in range(1, p + 1):
         W = pulp.LpVariable(f"W_{stage}", lowBound=0)
+        H = pulp.LpVariable(f"H_{stage}", lowBound=0)
 
         S1 = S[(stage, 1, 'F_S')]
+        S2 = S[(stage, m + 1, 'F_T')]
+        mdl += W <= S1
+        mdl += W <= S2
+        
+        mdl += H >= E[(stage, m, 'W')]
+        mdl += H >= E[(stage, m + times, 'F_T')]
+        
         # If the first teacher forward of the next iteration exists (mb = m+1), use it like schedule_ts did
-        if has(stage, m + 1, 'F_T'):
-            S2 = S[(stage, m + 1, 'F_T')]
-            mdl += W <= S1
-            mdl += W <= S2
-        else:
-            mdl += W <= S1
+        # if has(stage, m + 1, 'F_T'):
+        #     print("===================")
+        #     S2 = S[(stage, m + 1, 'F_T')]
+        #     mdl += W <= S1
+        #     mdl += W <= S2
+        # else:
+        #     mdl += W <= S1
 
-        mdl += Z >= E[(stage, m, 'W')] - W
+        mdl += Z >= H - W
     mdl += Z
 
     # ------------------------ Temporal relations ----------------
@@ -172,11 +183,13 @@ def special(p=3, m=2, T_comm=0.0, gpu_mem_limit=None, delta_mem=None,
 
 
 def schedule_ts(p=3, m=3, T_comm=0.0, gpu_mem_limit=100, delta_mem=None, time_limit=60*10, msg=0):
+    alpha = 1.5
+    
     T = {}
     for stage in range(1, p+1):
         for mb in range(1, m+1):
             T[(stage, mb, 'F_S')] = 1
-            T[(stage, mb, 'F_T')] = 1
+            T[(stage, mb, 'F_T')] = alpha * T[(1, 1, 'F_S')]
             T[(stage, mb, 'B')] = 1
             T[(stage, mb, 'W')] = 1
 
@@ -439,15 +452,15 @@ def analyze_bubble_vs_gpu_limit(p, m, T_comm, M_B, M_W, delta_mem, time_limit=60
 
 if __name__ == "__main__":
     p = 3                   # @param GPUs
-    m = 2                   # @param microbatches
+    m = 2*p                  # @param microbatches
     T_comm = 0.0            # @param inter-stage communication time
     M_B, M_W = 25, 10       # @param Memory usage for B and W operations in GB
     gpu_mem_limit = m*M_B   # @param GPU memory limit in GB
     delta_mem = {'F_S': M_B, 'F_T':0, 'B': M_W - M_B, 'W': -M_W}
     
     # special
-    mdl, Z, S, E, T, y = special(p=p, m=m, T_comm=T_comm, gpu_mem_limit=gpu_mem_limit, delta_mem=delta_mem, times=2, time_limit=60*10, msg=1)
-    # mdl, Z, S, E, T, y = schedule_ts(p=p, m=m, T_comm=T_comm, gpu_mem_limit=gpu_mem_limit, delta_mem=delta_mem, time_limit=60*60*12, msg=1)
+    # mdl, Z, S, E, T, y = special(p=p, m=m, T_comm=T_comm, gpu_mem_limit=gpu_mem_limit, delta_mem=delta_mem, times=2, time_limit=60*10, msg=1)
+    mdl, Z, S, E, T, y = schedule_ts(p=p, m=m, T_comm=T_comm, gpu_mem_limit=gpu_mem_limit, delta_mem=delta_mem, time_limit=60*10, msg=1)
     
     
     tot_bubble_size, bubble_sizes, schedule, total_time = bubble_info(mdl, Z, S, E, T, y, p)
