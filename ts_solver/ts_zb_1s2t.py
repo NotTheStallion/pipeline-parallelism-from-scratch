@@ -9,6 +9,7 @@ m = 2                    # microbatches per batch
 T_comm = 0.0             # inter-stage comm time
 M_B, M_W = 25, 10        # memory deltas (GB)
 gpu_mem_limit = p*M_B  # GPU memory limit (GB)
+alpha = 1.5
 
 times = 2
 
@@ -18,14 +19,14 @@ T = {}
 for stage in range(1, p+1):
     for mb in range(1, m+1):
         T[(stage, mb, 'F_S')] = 1
-        T[(stage, mb, 'F_T')] = 1
+        # T[(stage, mb, 'F_T')] = 1
         T[(stage, mb, 'B')]   = 1
         T[(stage, mb, 'W')]   = 1
 
 # Next batch: teacher forwards only
 for stage in range(1, p+1):
-    for mb in range(m+1, times+m+1):
-        T[(stage, mb, 'F_T')] = 1
+    for mb in range(1, times+m+1):
+        T[(stage, mb, 'F_T')] = alpha * T[(1, 1, 'F_S')]
 
 def has(stage, mb, op):
     return (stage, mb, op) in T
