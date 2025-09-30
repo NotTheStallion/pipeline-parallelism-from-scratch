@@ -4,8 +4,9 @@ from collections import defaultdict
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 
-p = 8
-m = 2*p + 4
+p = 4
+alpha = 0.3
+m = 2*p # + int(alpha)
 M = 20
 ops = ['F_S', 'F_T', 'B', 'W']
 M_B, M_W = 25, 10       # Memory usage for B and W operations in GB
@@ -26,7 +27,10 @@ T = {}
 for stage in range(1, p + 1):
     for mb in range(1, m + 1):
         for op in ops:
-            T[(stage, mb, op)] = round(T_total / m, 5)
+            if op == 'F_T':
+                T[(stage, mb, op)] = round(alpha * (T_total / m), 5)
+            else:
+                T[(stage, mb, op)] = round(T_total / m, 5)
 
 
 S = {}
@@ -34,59 +38,60 @@ S = {}
 
 for stage in range(1, p + 1):
     print(f"For stage {stage}: {p-stage} idle steps before starting F_T")
-    
+    print((mb - 1) * T[(1,1,'F_T')] + (mb - 1) * T[(1,1,'F_S')] + (stage - 1)*T[(1,1,'F_T')])
     for mb in range(1, p-stage + 2):
-        S[(stage, mb, 'F_T')] = (2 * (mb - 1) + stage - 1)*T[(stage, mb, 'F_T')]
-        S[(stage, mb, 'F_S')] = S[(stage, mb, 'F_T')] + T[(stage, mb, 'F_T')]
+        S[(stage, mb, 'F_T')] = max((mb - 1) * T[(1,1,'F_T')] + (mb - 1) * T[(1,1,'F_S')] + (stage - 1)*T[(1,1,'F_T')], (mb - 1) * T[(1,1,'F_T')] + (mb - 1) * T[(1,1,'F_S')] + (stage - 1)*T[(1,1,'F_S')])#, S[(stage-1, mb, 'F_T')] + T[(stage-1, mb, 'F_T')] if stage > 1 else 0, S[(stage, mb-1, 'F_S')] + T[(stage, mb-1, 'F_S')] if mb > 1 else 0, S[(stage, mb, 'B')] + T[(stage, mb, 'B')])
+        S[(stage, mb, 'F_S')] = max(S[(stage, mb, 'F_T')] + T[(stage, mb, 'F_T')], S[(stage-1, mb, 'F_S')] + T[(stage-1, mb, 'F_S')] if stage > 1 else 0)
     
     
 # repeat steady phase pattern [F_T, F_S, B] for remaining microbatches
-for stage in range(1, p + 1):
-    for mb in range(p - stage + 2, m + 1):
-        # print(f"Scheduling stage {stage} mb {mb}")
-        if mb - 1 != 0 :
-            S[(stage, mb, 'F_T')] = S[(stage, mb - 1, 'F_T')] + 3*T[(stage, mb - 1, 'F_T')]
-            S[(stage, mb, 'F_S')] = S[(stage, mb - 1, 'F_S')] + 3*T[(stage, mb - 1, 'F_S')]
-            # S[(stage, mb, 'B')] = S[(stage, mb - 1, 'B')] + 3 
-        else :
-            S[(stage, mb, 'F_T')] = (p - 1)*T[(stage, mb, 'F_T')]
-            S[(stage, mb, 'F_S')] = S[(stage, mb, 'F_T')] + T[(stage, mb, 'F_T')]
+for stage in range(p, 0, -1):
+    if stage == p:
+        for mb in range(p - stage + 2, m + 1):
+            S[(stage, mb, 'F_T')] = S[(stage, mb - 1, 'F_T')] + T[(stage, mb - 1, 'F_T')] + T[(stage, mb - 1, 'F_S')] + T[(stage, mb - 1, 'B')]
+            S[(stage, mb, 'F_S')] = S[(stage, mb - 1, 'F_S')] + T[(stage, mb - 1, 'F_T')] + T[(stage, mb - 1, 'F_S')] + T[(stage, mb - 1, 'B')]
+    else:
+        for mb in range(p - stage + 2, m + 1):
+            print(f"Stage {stage}, mb {mb}")
+            S[(stage, mb, 'F_T')] = S[(stage + 1, mb-1, 'F_T')] + T[(stage + 1, mb, 'B')]
+            S[(stage, mb, 'F_S')] = S[(stage , mb, 'F_T')] + T[(stage, mb, 'F_T')]
+
 
 
 # perform the B passes
 S[(p, 1, 'B')] = S[(p, 1, 'F_S')] + T[(p, 1, 'F_S')]
 for stage in range(p-1, 0, -1):
     print(f"For stage {stage}")
-    S[(stage, 1, 'B')] = S[(stage + 1 , 1, 'B')] + T[(stage + 1, 1, 'B')]
+    S[(stage, 1, 'B')] = max(S[(stage + 1 , 1, 'B')] + T[(stage + 1, 1, 'B')], S[(stage, 1+(p-stage), 'F_S')] + T[(stage, 1+(p-stage), 'F_S')])
 
 for stage in range(1, p + 1):
     for mb in range(2, m + 1):
-        S[(stage, mb, 'B')] = S[(stage, mb - 1, 'B')] + 3*T[(stage, mb - 1, 'B')]
+        S[(stage, mb, 'B')] = S[(stage, mb - 1, 'B')] + T[(stage, mb - 1, 'B')] + T[(stage, mb, 'F_T')] + T[(stage, mb, 'F_S')]
         
 
 
-# Schedule W passes after B passes, shifting if needed
+# Schedule W passes after each B pass, ASAP without overlaps
 for stage in range(1, p + 1):
     for mb in range(1, m + 1):
-        # Schedule W after B for this microbatch, avoiding overlaps
-        w_start = S[(stage, m-(p-stage), 'B')] + T[(stage, m-(p-stage), 'B')]
-        
-        print(f"{w_start=}")
-        print(f"{[S.get((stage, mb2, op), -1)
-            for mb2 in range(1, m + 1)
-            for op in ops]}")
-        
-         # Shift right until no overlap with any existing op in this stage
-        while any(
-            # (S.get((stage, mb2, op), -10) <= w_start < S.get((stage, mb2, op), -10) + T[(stage, mb2, op)])
-            (abs(S.get((stage, mb2, op), -1) - w_start) < 1e-6)
+
+        last_B_mb = m - (p - stage)   # last microbatch that ran B in this stage
+        last_B_finish = S[(stage, last_B_mb, 'B')] + T[(stage, last_B_mb, 'B')]
+        w_start = last_B_finish
+
+        # Collect all existing ops in this stage
+        stage_ops = [
+            (S[(stage, mb2, op)], S[(stage, mb2, op)] + T[(stage, mb2, op)])
             for mb2 in range(1, m + 1)
             for op in ops if (stage, mb2, op) in S
-        ):
-            w_start += T[(p, 1, 'F_T')]  # shift by forward chunk duration
+        ]
 
-        # Assign final start time for W
+        # Shift W forward until no overlap
+        while any(start < w_start + T[(stage, mb, 'W')] and w_start < end for start, end in stage_ops):
+            w_start = max(end for start, end in stage_ops if start < w_start + T[(stage, mb, 'W')] and w_start < end)
+
+        # Assign W pass start time
         S[(stage, mb, 'W')] = w_start
+
 
 
 
