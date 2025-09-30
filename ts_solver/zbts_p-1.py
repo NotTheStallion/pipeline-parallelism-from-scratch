@@ -11,7 +11,7 @@ ops = ['F_S', 'F_T', 'B', 'W']
 M_B, M_W = 25, 10       # Memory usage for B and W operations in GB
 M_BBatch, M_WBatch = 50, 20
 T_total = 10
-alpha = 1.7
+alpha = 0.4
 
 # Memory scaling per microbatch
 delta_mem = {
@@ -43,15 +43,16 @@ print(f"Memory per microbatch: F_S {delta_mem['F_S']}, B {delta_mem['B']}, W {de
 S = {}
 
 # p-1 warmup teacher forwards
-for mb in range(1, m + 1):
-    S[(1, mb, 'F_T')] = (mb - 1) * T[(1, mb, 'F_T')]
+# for mb in range(1, m + 1):
+#     S[(1, mb, 'F_T')] = (mb - 1) * T[(1, mb, 'F_T')]
 
-for stage in range(2, p+1):
-    for mb in range(1, m + 1):
-        S[(stage, mb, 'F_T')] = S[(stage - 1, mb, 'F_T')] + T[(stage - 1, mb, 'F_T')]
+for stage in range(1, p + 1):
+    S[(stage, m, 'F_T')] = (stage-1) * T[(stage, 1, 'F_S')] + (m-1) * T[(stage, 1, 'F_T')]
+    for mb in range(m - 1, 0, -1):
+        S[(stage, mb, 'F_T')] = S[(stage, mb + 1, 'F_T')] - T[(stage, mb, 'F_T')]
         
 # interleaved student forwards
-S[(p, 1, 'F_S')] = S[(p, m, 'F_T')] + T[(p, m, 'F_T')]
+S[(p, 1, 'F_S')] = S[(p, m, 'F_T')] + T[(p, m, 'F_T')] 
 for mb in range(2, m + 1):
     S[(p, mb, 'F_S')] = S[(p, mb - 1, 'F_S')] + T[(p, mb - 1, 'F_S')] + T[(p, mb - 1, 'F_S')]
     
