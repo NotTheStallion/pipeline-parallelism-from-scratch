@@ -12,7 +12,7 @@ ops = ['F_S', 'F_T', 'B', 'W']
 M_B, M_W = 25, 10       # @param Memory usage for B and W operations in GB
 M_BBatch, M_WBatch = 50, 20
 T_total = 10
-alpha = 1.7
+alpha = 0.3
 delta_mem = {'F_S': M_BBatch/(num_micorbatches//2) + M_WBatch/(num_micorbatches//2), 'F_T': 0, 'B': (- M_BBatch/(num_micorbatches//2) - M_WBatch/(num_micorbatches//2)) /2, 'W': 0}
 
 print(f"Time per microbatch: {T_total/num_micorbatches}, alpha: {alpha}")
