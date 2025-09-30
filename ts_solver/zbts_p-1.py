@@ -11,7 +11,7 @@ ops = ['F_S', 'F_T', 'B', 'W']
 M_B, M_W = 25, 10       # Memory usage for B and W operations in GB
 M_BBatch, M_WBatch = 50, 20
 T_total = 10
-alpha = 2
+alpha = 1.7
 
 # Memory scaling per microbatch
 delta_mem = {
@@ -43,7 +43,6 @@ print(f"Memory per microbatch: F_S {delta_mem['F_S']}, B {delta_mem['B']}, W {de
 S = {}
 
 # p-1 warmup teacher forwards
-
 for mb in range(1, m + 1):
     S[(1, mb, 'F_T')] = (mb - 1) * T[(1, mb, 'F_T')]
 
@@ -52,20 +51,24 @@ for stage in range(2, p+1):
         S[(stage, mb, 'F_T')] = S[(stage - 1, mb, 'F_T')] + T[(stage - 1, mb, 'F_T')]
         
 # interleaved student forwards
+S[(p, 1, 'F_S')] = S[(p, m, 'F_T')] + T[(p, m, 'F_T')]
+for mb in range(2, m + 1):
+    S[(p, mb, 'F_S')] = S[(p, mb - 1, 'F_S')] + T[(p, mb - 1, 'F_S')] + T[(p, mb - 1, 'F_S')]
+    
 
-for stage in range(1, p + 1):
-    S[(stage, 1, 'F_S')] = S[(stage, m, 'F_T')] + T[(stage, m, 'F_T')] #+ T[(stage, m-1, 'B')]
-    for mb in range(2, m + 1):
-        S[(stage, mb, 'F_S')] = S[(stage, mb - 1, 'F_S')] + T[(stage, mb - 1, 'F_S')] + T[(stage, mb - 1, 'F_S')]
+for stage in range(p - 1, 0, -1):
+    for mb in range(1, m + 1):
+        S[(stage, mb, 'F_S')] = S[(stage + 1, mb, 'F_S')] - T[(stage + 1, mb, 'F_S')]
 
 # interleaved backwards
-
 for mb in range(1, m + 1):
     S[(p, mb, 'B')] = S[(p, mb, 'F_S')] + T[(p, mb, 'F_S')]
+
 
 for stage in range(p - 1, 0, -1):
     for mb in range(1, m + 1):
         S[(stage, mb, 'B')] = S[(stage + 1, mb, 'B')] + T[(stage + 1, mb, 'B')]
+
 
 # Schedule W passes after B passes, shifting if needed
 for stage in range(1, p + 1):
@@ -97,7 +100,7 @@ for stage in range(1, p + 1):
 for stage in range(1, p + 1):
     for mb in range(m+1, 2*m + 1):
         # Earliest start: after F_S of corresponding previous microbatch
-        f_start = S[(stage, mb-m, 'F_S')] + T[(stage, mb-m, 'F_S')]
+        f_start = max(S[(stage, m, 'F_T')] + T[(stage, m, 'F_T')], S[(stage-1, mb, 'F_T')] + T[(stage-1, mb, 'F_T')] if stage > 1 else 0)
         f_dur = T[(stage, mb, 'F_T')]
 
         # Collect ops in this stage (including bubble ones already placed)
