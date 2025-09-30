@@ -4,14 +4,14 @@ from collections import defaultdict
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 
-p = 8
+p = 4
 m = p-1
 M = 20
 ops = ['F_S', 'F_T', 'B', 'W']
 M_B, M_W = 25, 10       # Memory usage for B and W operations in GB
 M_BBatch, M_WBatch = 50, 20
 T_total = 10
-alpha = 1
+alpha = 2
 
 # Memory scaling per microbatch
 delta_mem = {
@@ -56,7 +56,7 @@ for stage in range(2, p+1):
 for stage in range(1, p + 1):
     S[(stage, 1, 'F_S')] = S[(stage, m, 'F_T')] + T[(stage, m, 'F_T')] #+ T[(stage, m-1, 'B')]
     for mb in range(2, m + 1):
-        S[(stage, mb, 'F_S')] = S[(stage, mb - 1, 'F_S')] + T[(stage, mb - 1, 'F_S')] + T[(stage, mb - 1, 'B')]
+        S[(stage, mb, 'F_S')] = S[(stage, mb - 1, 'F_S')] + T[(stage, mb - 1, 'F_S')] + T[(stage, mb - 1, 'F_S')]
 
 # interleaved backwards
 
@@ -70,32 +70,50 @@ for stage in range(p - 1, 0, -1):
 # Schedule W passes after B passes, shifting if needed
 for stage in range(1, p + 1):
     for mb in range(1, m + 1):
-        # Schedule W after B for this microbatch, avoiding overlaps
+        if (stage, mb, 'B') not in S:
+            continue  # skip if no B scheduled for this microbatch
+
+        # Earliest possible start: right after its B pass
         w_start = S[(stage, mb, 'B')] + T[(stage, mb, 'B')]
-        
-        while any(
-            (S.get((stage, mb2, op), -1) == w_start)
+        w_dur = T[(stage, mb, 'W')]
+
+        # Collect all operations already scheduled in this stage
+        stage_ops = [
+            (S[(stage, mb2, op)], S[(stage, mb2, op)] + T[(stage, mb2, op)])
             for mb2 in range(1, m + 1)
-            for op in ops
-        ):
-            w_start += T[(stage, mb, 'W')]
+            for op in ops if (stage, mb2, op) in S
+        ]
+
+        # Shift until no overlap
+        while any(start < w_start + w_dur and w_start < end for start, end in stage_ops):
+            w_start = max(end for start, end in stage_ops if start < w_start + w_dur and w_start < end)
+
+        # Assign W pass
         S[(stage, mb, 'W')] = w_start
+
     
 
 # Fill bubble with next batch teacher forwards
 for stage in range(1, p + 1):
     for mb in range(m+1, 2*m + 1):
-        # Schedule F_T after F_S of previous microbatch, avoiding overlaps
-        print(mb)
+        # Earliest start: after F_S of corresponding previous microbatch
         f_start = S[(stage, mb-m, 'F_S')] + T[(stage, mb-m, 'F_S')]
-        
-        while any(
-            (S.get((stage, mb2, op), -1) == f_start)
+        f_dur = T[(stage, mb, 'F_T')]
+
+        # Collect ops in this stage (including bubble ones already placed)
+        stage_ops = [
+            (S[(stage, mb2, op)], S[(stage, mb2, op)] + T[(stage, mb2, op)])
             for mb2 in range(1, 2*m + 1)
-            for op in ops
-        ):
-            f_start += T[(stage, mb, 'F_T')]
+            for op in ops if (stage, mb2, op) in S
+        ]
+
+        # Shift until no overlap
+        while any(start < f_start + f_dur and f_start < end for start, end in stage_ops):
+            f_start = max(end for start, end in stage_ops if start < f_start + f_dur and f_start < end)
+
+        # Assign F_T pass
         S[(stage, mb, 'F_T')] = f_start
+
 
 
 
