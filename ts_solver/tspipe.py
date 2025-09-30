@@ -12,7 +12,7 @@ ops = ['F_S', 'F_T', 'B', 'W']
 M_B, M_W = 25, 10       # @param Memory usage for B and W operations in GB
 M_BBatch, M_WBatch = 50, 20
 T_total = 10
-alpha = 1
+alpha = 1.7
 delta_mem = {'F_S': M_BBatch/(num_micorbatches//2) + M_WBatch/(num_micorbatches//2), 'F_T': 0, 'B': (- M_BBatch/(num_micorbatches//2) - M_WBatch/(num_micorbatches//2)) /2, 'W': 0}
 
 print(f"Time per microbatch: {T_total/num_micorbatches}, alpha: {alpha}")
@@ -65,12 +65,6 @@ for stage in range(p-1, 1, -1):
     for mb in range(2, m + 1):
         S[(stage, mb, 'B')] = S[(stage, mb-1, 'B')] + T[(stage, mb-1, 'B')]
 
-    S[(stage, (m//2)+1, 'F_T')] = S[(stage, m//2, 'F_S')] + T[(stage, m//2, 'F_S')]
-    for mb in range((m//2)+2, m + 1):
-        S[(stage, mb, 'F_T')] = S[(stage, mb-1, 'F_T')] + T[(stage, mb-1, 'F_T')]
-        if S[(stage, mb, 'F_T')] == S[(stage, 1, 'B')]:
-            S[(stage, mb, 'F_T')] += 2*(p-1)*T[(stage, mb, 'F_T')]
-
 
 
 # First stage
@@ -82,7 +76,7 @@ S[(1, 1, 'F_S')] = S[(1, m//2, 'F_T')] + T[(1, m//2, 'F_T')]
 for mb in range(2, m//2 + 1):
     S[(1, mb, 'F_S')] = S[(1, mb-1, 'F_S')] + T[(1, mb-1, 'F_S')]
 
-S[(1, 1, 'B')] = S[(1, m//2, 'F_S')] + T[(1, m//2, 'F_S')] + (p-1)*2*T[(1, 1, 'B')]
+S[(1, 1, 'B')] = S[(2, 1,'B')] + T[(2, 1, 'B')]
 for mb in range(2, m + 1):
     S[(1, mb, 'B')] = S[(1, mb-1, 'B')] + T[(1, mb-1, 'B')]
 
@@ -90,6 +84,26 @@ S[(1, (m//2)+1, 'F_T')] = S[(1, m//2, 'F_S')] + T[(1, m//2, 'F_S')]
 for mb in range((m//2)+2, m + 1):
     S[(1, mb, 'F_T')] = S[(1, mb-1, 'F_T')] + T[(1, mb-1, 'F_T')]
 
+
+for stage in range(2, p+1):
+    # first F_T in the second half
+    S[(stage, m//2+1, 'F_T')] = S[(stage-1, m//2+1, 'F_T')] + T[(stage, m//2, 'F_T')]
+
+    if stage == p:
+        S[(stage, m//2+1, 'F_T')] = S[(stage, m, 'B')] + T[(stage, m, 'B')]
+
+    for mb in range((m//2)+2, m + 1):
+        # candidate start
+        S[(stage, mb, 'F_T')] = S[(stage, mb-1, 'F_T')] + T[(stage, mb-1, 'F_T')]
+
+        # shift until no overlap with any backward at this stage
+        while any(
+            (S[(stage, mb, 'F_T')] < S[(stage, mb2, 'B')] + T[(stage, mb2, 'B')]) and
+            (S[(stage, mb, 'F_T')] + T[(stage, mb, 'F_T')] > S[(stage, mb2, 'B')])
+            for mb2 in range(1, m+1) if (stage, mb2, 'B') in S
+        ):
+            S[(stage, mb, 'F_T')] = S[(stage, m, 'B')] + T[(stage, m, 'B')]
+        S[(stage, mb, 'F_T')] = max(S[(stage, mb, 'F_T')], S[(stage-1, mb, 'F_T')] + T[(stage, mb-1, 'F_T')])
 
 
 
@@ -138,7 +152,7 @@ for gpu in range(1, p + 1):
     ax1.axhline(gpu - 0.5, color='gray', linestyle='--', alpha=0.3)
 
 # --- Bottom: Memory usage ---
-time_points = range(60 + 1)
+time_points = range(70 + 1)
 for stage in range(1, p + 1):
     events = []
     for s, e, mb, op in sorted(schedule[stage], key=lambda x: x[0]):
