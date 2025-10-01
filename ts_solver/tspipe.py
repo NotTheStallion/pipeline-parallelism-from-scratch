@@ -12,7 +12,7 @@ ops = ['F_S', 'F_T', 'B', 'W']
 M_B, M_W = 25, 10       # @param Memory usage for B and W operations in GB
 M_BBatch, M_WBatch = 50, 20
 T_total = 10
-alpha = 0.3
+alpha = 1.3
 delta_mem = {'F_S': M_BBatch/(num_micorbatches//2) + M_WBatch/(num_micorbatches//2), 'F_T': 0, 'B': (- M_BBatch/(num_micorbatches//2) - M_WBatch/(num_micorbatches//2)) /2, 'W': 0}
 
 print(f"Time per microbatch: {T_total/num_micorbatches}, alpha: {alpha}")
@@ -120,64 +120,146 @@ for task in sorted(T.keys()):
 
 print(schedule[2])
 
-# Plot schedule (Teacher-Student)
-fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(25, 8), sharex=True,
-                                gridspec_kw={'height_ratios': [2, 1]})
+import matplotlib.pyplot as plt
+import matplotlib.patches as patches
+
+# --- Figure 1: Schedule + Memory ---
+fig, (ax1, ax2) = plt.subplots(
+    2, 1, figsize=(14, 8), sharex=True,
+    gridspec_kw={'height_ratios': [2, 1]}
+)
 
 # --- Top: Gantt chart ---
-op_colors = {'F_S': 'royalblue', 'F_T': 'orange', 'B': 'crimson', 'W': 'forestgreen'}
+op_colors = {
+    'F_S': 'royalblue',
+    'F_T': 'orange',
+    'B': 'crimson',
+    'W': 'forestgreen'
+}
+
 for stage in range(1, p + 1):
     for s, e, mb, op in sorted(schedule[stage]):
-        ax1.barh(stage, e - s, left=s, height=1,
-                 color=op_colors[op], edgecolor='black')
-        if op in ["B"]:
-            ax1.text(s + (e - s) / 2, stage, f"{op}{((mb-1)//2)+1}",
-                va='center', ha='center', fontsize=12, color='white')  # Increased fontsize
-        else:
-            ax1.text(s + (e - s) / 2, stage, f"{op}{mb}",
-                    va='center', ha='center', fontsize=12, color='white')  # Increased fontsize
+        ax1.barh(
+            y=stage,
+            width=e - s,
+            left=s,
+            height=0.6,
+            color=op_colors[op],
+            edgecolor='black'
+        )
+        # Add operation + microbatch text inside the bar
+        ax1.text(
+            x=s + (e - s) / 2,
+            y=stage,
+            s=f"{op}{mb}",
+            va='center',
+            ha='center',
+            fontsize=10,
+            color='white',
+            fontweight='bold'
+        )
 
-ax1.set_ylabel("GPU", fontsize=12)  # Increased fontsize
+ax1.set_ylabel("GPU")
+ax1.set_xlabel("Time")   # show x values
 ax1.set_yticks(range(1, p + 1))
 ax1.set_ylim(0.5, p + 0.5)
-ax1.set_title("GPU Operation Schedule (F_S=Forward Student, F_T=Forward Teacher, B=Backward, W=Weight Update)", fontsize=14)  # Increased fontsize
-# ax1.grid(True, linestyle='--', alpha=0.4)
+ax1.set_title("GPU Operation Schedule\n(F_S=Forward Student, F_T=Forward Teacher, B=Backward, W=Weight Update)")
+ax1.grid(True, linestyle='--', alpha=0.4)
 handles = [patches.Patch(color=op_colors[c], label=c) for c in op_colors]
-ax1.legend(handles=handles, title='Operations', loc='upper right', fontsize=10, title_fontsize=12)  # Increased fontsize
-
-# Draw vertical and horizontal lines at each increment of 1
-for t in range(0, 46):
-    ax1.axvline(t, color='gray', linestyle='--', alpha=0.3)
-for gpu in range(1, p + 1):
-    ax1.axhline(gpu - 0.5, color='gray', linestyle='--', alpha=0.3)
+ax1.legend(handles=handles, title='Operations', loc='upper right')
 
 # --- Bottom: Memory usage ---
-time_points = range(70 + 1)
+time_points = range(m * 4 + 10)
+
 for stage in range(1, p + 1):
-    events = []
-    for s, e, mb, op in sorted(schedule[stage], key=lambda x: x[0]):
-        events.append((s, delta_mem[op]))
+    events = [(s, delta_mem[op]) for s, _, _, op in sorted(schedule[stage], key=lambda x: x[0])]
+
     mem_timeline = [0]
     cur_mem = 0
-    last_t = 0
+
     for t in time_points:
         while events and events[0][0] <= t:
             _, delta = events.pop(0)
             cur_mem += delta
         mem_timeline.append(cur_mem)
+
     ax2.plot(time_points, mem_timeline[:-1], label=f"GPU{stage}")
 
-ax2.set_xlabel("Time", fontsize=12)  # Increased fontsize
-ax2.set_ylabel("Memory (GB)", fontsize=12)  # Increased fontsize
-ax2.set_title("Per-GPU Memory Usage Over Time", fontsize=14)  # Increased fontsize
+ax2.set_xlabel("Time")
+ax2.set_ylabel("Memory (GB)")
+ax2.set_title("Per-GPU Memory Usage Over Time")
 ax2.grid(True, linestyle='--', alpha=0.4)
-ax2.legend(fontsize=13)  # Increased fontsize
-
-# Draw vertical and horizontal lines at each increment of 1
-# for t in range(0, 46):
-#     ax2.axvline(t, color='gray', linestyle='--', alpha=0.3)
-# for mem in range(0, int(max(mem_timeline)) + 1):
-#     ax2.axhline(mem, color='gray', linestyle='--', alpha=0.3)
+ax2.legend()
 
 plt.tight_layout()
-plt.savefig("res_tspipe.png")
+plt.savefig("predef_tspipe_hand.png")
+plt.show()
+
+
+# --- Figure 2: Only Schedule (Gantt chart) ---
+fig2, ax_sched = plt.subplots(figsize=(14, 4))
+
+# Find makespan and per-op total time
+stage_makespans = []
+for stage in range(1, p + 1):
+    starts = [s for s, _, _, op in schedule[stage] if op == 'F_S' and s != float('inf')]
+    ends = [e for _, e, _, _ in schedule[stage] if e != float('inf')]
+    if starts and ends:
+        stage_makespans.append(max(ends) - min(starts))
+    else:
+        stage_makespans.append(0)
+makespan = max(stage_makespans)
+
+# first_start = min(
+#     s for stage in range(1, p + 1) for s, _, _, op in schedule[stage] if op == 'F_S'
+# )
+# last_end = max(e for stage in range(1, p + 1) for _, e, _, _ in schedule[stage])
+
+# print(first_start, last_end)
+
+# makespan = last_end - first_start
+
+op_totals = {op: 0.0 for op in ops}
+for stage in range(1, p + 1):
+    for s, e, mb, op in sorted(schedule[stage]):
+        op_totals[op] += e - s
+
+for stage in range(1, p + 1):
+    for s, e, mb, op in sorted(schedule[stage]):
+        ax_sched.barh(
+            y=stage,
+            width=e - s,
+            left=s,
+            height=0.6,
+            color=op_colors[op],
+            edgecolor='black'
+        )
+        # Add operation + microbatch text
+        ax_sched.text(
+            x=s + (e - s) / 2,
+            y=stage,
+            s=f"{mb}",
+            va='center',
+            ha='center',
+            fontsize=10,
+            color='white',
+            fontweight='bold'
+        )
+
+ax_sched.set_ylabel("GPU")
+ax_sched.set_xlabel("Time")
+ax_sched.set_yticks(range(1, p + 1))
+ax_sched.set_ylim(0.5, p + 0.5)
+ax_sched.set_title("GPU Operation Schedule (Only)")
+ax_sched.grid(True, linestyle='--', alpha=0.4)
+
+handles2 = [patches.Patch(color=op_colors[c], label=f"{c}") for c in op_colors]
+legend_text = (
+    f"Makespan: {makespan:.2f}\n"
+    f"T: {T_total:.2f}\nα: {alpha:.2f} "
+)
+ax_sched.legend(handles=handles2, title=legend_text, loc='upper right')
+
+plt.tight_layout()
+plt.savefig("predef_tspipe_hand_schedule_only.png")
+plt.show()
