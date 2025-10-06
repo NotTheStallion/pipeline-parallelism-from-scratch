@@ -1,6 +1,8 @@
 import torch
 import torch.distributed as dist
 from torch import nn
+import matplotlib.pyplot as plt
+import matplotlib.patches as patches
 
 
 def sequential_forward(model_part, inputs):
@@ -81,3 +83,64 @@ def pipelined_iteration(model, inputs, targets, loss_fn):
     
     return sequential_backward(inputs, outputs, targets, loss_fn)
 
+
+
+def plot_memory_and_schedule(schedule, T, delta_mem, p, m, filename_prefix="predef_zbts_p-1_hand"):        
+    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(14, 8), sharex=True,
+                                gridspec_kw={'height_ratios': [2, 1]})
+
+    op_colors = {'F_S': 'royalblue', 'F_T': 'orange', 'B': 'crimson', 'W': 'forestgreen'}
+
+    for stage in range(1, p+1):
+        for s, e, mb, op in sorted(schedule[stage]):
+            ax1.barh(stage, e - s, left=s, height=0.6,
+                    color=op_colors[op], edgecolor='black')
+            ax1.text(s + (e - s)/2, stage, f"{op}{mb}", va='center', ha='center',
+                    fontsize=12, color='white')
+            
+    ax1.set_ylabel("GPU", fontsize=12)
+    ax1.set_yticks(range(1, p+1))
+    ax1.set_ylim(0.5, p + 0.5)
+    ax1.set_title("GPU Operation Schedule (F=Forward, B=Backward, W=Weight Update)", fontsize=14)
+    ax1.grid(True, linestyle='--', alpha=0.4)
+    handles = [patches.Patch(color=op_colors[c]) for c in op_colors]
+    labels = list(op_colors.keys())
+    ax1.legend(handles, labels, title='Operations', loc='upper right', fontsize=10, title_fontsize=12)
+
+
+    time_points = range(15)
+    for stage in range(1, p+1):
+        events = sorted((s, op) for s, e, mb, op in schedule[stage])
+        mem_timeline = []
+        cur_mem = 0
+        idx = 0
+        for t in time_points:
+            while idx < len(events) and events[idx][0] < t:
+                cur_mem += delta_mem[events[idx][1]]
+                idx += 1
+            mem_timeline.append(cur_mem)
+        ax2.plot(time_points, mem_timeline, label=f"GPU{stage}")
+
+    ax2.set_xlabel("Time", fontsize=12)
+    ax2.set_ylabel("Memory (GB)", fontsize=12)
+    ax2.set_title("Per-GPU Memory Usage Over Time", fontsize=14)
+    ax2.grid(True, linestyle='--', alpha=0.4)
+    ax2.legend(fontsize=13)
+    plt.tight_layout()
+    plt.savefig("" + filename_prefix + ".png")
+
+
+
+def precedes(a, b, y):
+    # Check if task a precedes task b
+    
+    if a == b:
+        return 1
+    
+    if (a, b) in y:
+        return y[(a, b)]
+    elif (b, a) in y:
+        return 1 - y[(b, a)]
+    else:
+        raise ValueError(f"No precedence relation defined for {a} and {b}")
+        
