@@ -22,7 +22,7 @@ def precedes(a, b, y):
 
 
 
-def schedule_ts(p=3, m=3, T_comm=0.0, gpu_mem_limit=100, delta_mem=None, time_limit=60*10, msg=0):
+def zb_sched(p=3, m=3, T_comm=0.0, gpu_mem_limit=100, delta_mem=None, time_limit=60*10, msg=0):
     if delta_mem is None:
         delta_mem = {'F': M_B, 'B': M_W - M_B, 'W': -M_W}
 
@@ -93,13 +93,10 @@ def schedule_ts(p=3, m=3, T_comm=0.0, gpu_mem_limit=100, delta_mem=None, time_li
 
     for stage in range(1, p+1):
         tasks_stage = [t for t in T.keys() if t[0] == stage]
-
-        # Enforce capacity at every finish instant E[t]
         for b in tasks_stage:
             # Sum deltas of all tasks u whose E[a] <= E[b]
             mem_prefix_terms = []
             for a in tasks_stage:
-                # print(f"Checking precedes relation for {a} and {b}")
                 mem_prefix_terms.append(delta_mem[a[2]] * precedes(a, b, y))
 
             mdl += pulp.lpSum(mem_prefix_terms) <= gpu_mem_limit
@@ -110,36 +107,27 @@ def schedule_ts(p=3, m=3, T_comm=0.0, gpu_mem_limit=100, delta_mem=None, time_li
     
     print("Objective value (Z):", pulp.value(Z))
     
-    
     return mdl, Z, S, E, T, y
 
 
 def bubble_info(mdl, Z, S, E, T, y, p):
     schedule = defaultdict(list)
     
-      
     for task in sorted(T.keys()):
         # task = (stage, mb, op)
         s = float(pulp.value(S[task]))
         e = float(pulp.value(E[task]))
         schedule[task[0]].append((s, e, task[1], task[2]))
 
-    print(schedule[2])
-    
-    # Compute bubble size (idle time) per stage
     total_time = float(pulp.value(Z))
     bubble_sizes = {}
     total_bubble_size = 0
-    for stage in range(1, p+1):
-        # Calculate the total time for the stage
-        
-        # Count the time spent on tasks (F, B, W) for this stage
+    for stage in range(1, p+1):        
         task_time = sum(
             float(pulp.value(E[task]) - pulp.value(S[task]))
             for task in T.keys() if task[0] == stage
         )
         
-        # Subtract the time spent on tasks from the total time to get idle time
         bubble_sizes[stage] = total_time - task_time
         total_bubble_size += bubble_sizes[stage]
     
@@ -149,17 +137,9 @@ def bubble_info(mdl, Z, S, E, T, y, p):
 
 
 def plot_schedule(mdl, Z, S, E, T, y, p, delta_mem, schedule):
-    # # Remove previous image if it exists
-    # if os.path.exists("zb.png"):
-    #     os.remove("zb.png")
-    
-  
-
-    # Plot schedule
     fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(14, 8), sharex=True,
                                    gridspec_kw={'height_ratios': [2, 1]})
 
-    # --- Top: Gantt chart ---
     op_colors = {'F': 'royalblue', 'B': 'crimson', 'W': 'forestgreen'}
     for stage in range(1, p+1):
         for s, e, mb, op in sorted(schedule[stage]):
@@ -176,7 +156,6 @@ def plot_schedule(mdl, Z, S, E, T, y, p, delta_mem, schedule):
     handles = [patches.Patch(color=op_colors[c], label=c) for c in op_colors]
     ax1.legend(handles=handles, title='Operations', loc='upper right')
 
-    # --- Bottom: Memory usage ---
     time_points = range(int(pulp.value(Z)) + 5)
     for stage in range(1, p+1):
         events = []
@@ -210,7 +189,7 @@ def analyze_bubble_vs_gpu_limit(p, m, T_comm, M_B, M_W, delta_mem, time_limit=60
     total_times = []
 
     for gpu_mem_limit in gpu_limits:
-        mdl, Z, S, E, T, y = schedule_ts(p=p, m=m, T_comm=T_comm, gpu_mem_limit=gpu_mem_limit, delta_mem=delta_mem, time_limit=time_limit)
+        mdl, Z, S, E, T, y = zb_sched(p=p, m=m, T_comm=T_comm, gpu_mem_limit=gpu_mem_limit, delta_mem=delta_mem, time_limit=time_limit)
         
         if pulp.LpStatus[mdl.status] != "Optimal":
             bubble_ratios.append(None)
@@ -257,16 +236,15 @@ def analyze_bubble_vs_gpu_limit(p, m, T_comm, M_B, M_W, delta_mem, time_limit=60
 
 if __name__ == "__main__":
     
-    p = 3                   # @param GPUs
-    m = 3                   # @param microbatches
-    T_comm = 0.0            # @param inter-stage communication time
-    M_B, M_W = 25, 10       # @param Memory usage for B and W operations in GB
+    p = 3                      # @param GPUs
+    m = 3                      # @param microbatches
+    T_comm = 0.0               # @param inter-stage communication time
+    M_B, M_W = 25, 10          # @param Memory usage for B and W operations in GB
     gpu_mem_limit = p*M_B+5    # @param GPU memory limit in GB
     delta_mem = {'F': M_B, 'B': M_W - M_B, 'W': -M_W}
     
-    mdl, Z, S, E, T, y = schedule_ts(p=p, m=m, T_comm=T_comm, gpu_mem_limit=gpu_mem_limit, delta_mem=delta_mem)
+    mdl, Z, S, E, T, y = zb_sched(p=p, m=m, T_comm=T_comm, gpu_mem_limit=gpu_mem_limit, delta_mem=delta_mem)
 
-    # Check if the problem is infeasible
     if pulp.LpStatus[mdl.status] != "Optimal":
         print("The problem is infeasible or could not be solved optimally.")
         exit(1)
