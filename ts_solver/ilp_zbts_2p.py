@@ -21,166 +21,6 @@ def precedes(a, b, y):
 import pulp
 from collections import defaultdict
 
-def special(p=3, m=2, T_comm=0.0, gpu_mem_limit=None, delta_mem=None,
-            times=2, time_limit=60*10, msg=0):
-    """
-    Refactored special() to use the same signature/style as schedule_ts().
-    - current batch: F_S, B, W for mb=1..m
-    - next iteration: F_T for mb=m+1..m+times
-    Returns: (mdl, Z, S, E, T, y)
-    """
-
-    # local memory deltas (kept from your original)
-    M_B, M_W = 25, 10
-    alpha = 2
-    times = p-1
-
-    # default gpu_mem_limit matches the previous special() default if not provided
-    if gpu_mem_limit is None:
-        gpu_mem_limit = (p - 1) * M_B - 1
-
-    # ------------------------ Tasks -----------------------------
-    T = {}
-    # current batch tasks
-    for stage in range(1, p + 1):
-        for mb in range(1, m + 1):
-            T[(stage, mb, 'F_S')] = 1
-            T[(stage, mb, 'B')]   = 1
-            T[(stage, mb, 'W')]   = 1
-
-    # next-iteration teacher forwards only
-    for stage in range(1, p + 1):
-        for mb in range(m + 1, m + times + 1):
-            T[(stage, mb, 'F_T')] = alpha * T[(1, 1, 'F_S')]
-
-    def has(stage, mb, op):
-        return (stage, mb, op) in T
-
-    # ------------------------ Model -----------------------------
-    mdl = pulp.LpProblem("ZB_ILP_student_current_teacher_next", pulp.LpMinimize)
-
-    S = {k: pulp.LpVariable(f"S_{k[0]}_{k[1]}_{k[2]}", lowBound=0) for k in T}
-    E = {k: pulp.LpVariable(f"E_{k[0]}_{k[1]}_{k[2]}", lowBound=0) for k in T}
-    Z = pulp.LpVariable("Z", lowBound=0)
-
-    # ------------------------ Objective (match schedule_ts style) ----
-    for stage in range(1, p + 1):
-        W = pulp.LpVariable(f"W_{stage}", lowBound=0)
-        H = pulp.LpVariable(f"H_{stage}", lowBound=0)
-
-        S1 = S[(stage, 1, 'F_S')]
-        S2 = S[(stage, m + 1, 'F_T')]
-        mdl += W <= S1
-        mdl += W <= S2
-        
-        mdl += H >= E[(stage, m, 'W')]
-        mdl += H >= E[(stage, m + times, 'F_T')]
-        
-        # If the first teacher forward of the next iteration exists (mb = m+1), use it like schedule_ts did
-        # if has(stage, m + 1, 'F_T'):
-        #     print("===================")
-        #     S2 = S[(stage, m + 1, 'F_T')]
-        #     mdl += W <= S1
-        #     mdl += W <= S2
-        # else:
-        #     mdl += W <= S1
-
-        mdl += Z >= H - W
-    mdl += Z
-
-    # ------------------------ Temporal relations ----------------
-    # start-end relation
-    for k, dur in T.items():
-        mdl += E[k] == S[k] + dur
-
-    # Intra-microbatch chaining for current batch: F_S -> B -> W
-    for stage in range(1, p + 1):
-        for mb in range(1, m + 1):
-            mdl += S[(stage, mb, 'B')] >= E[(stage, mb, 'F_S')] + T_comm
-            mdl += S[(stage, mb, 'W')] >= E[(stage, mb, 'B')] + T_comm
-
-    # Microbatch order per-op on each stage
-    for stage in range(1, p + 1):
-        # order student forwards across 1..m
-        for j in range(2, m + 1):
-            if has(stage, j, 'F_S') and has(stage, j - 1, 'F_S'):
-                mdl += S[(stage, j, 'F_S')] >= E[(stage, j - 1, 'F_S')] + T_comm
-
-        # order teacher forwards across m+1..m+times
-        for j in range(m + 2, m + times + 1):
-            if has(stage, j, 'F_T') and has(stage, j - 1, 'F_T'):
-                mdl += S[(stage, j, 'F_T')] >= E[(stage, j - 1, 'F_T')] + T_comm
-
-        # order B and W across 1..m
-        for op in ['B', 'W']:
-            for j in range(2, m + 1):
-                if has(stage, j, op) and has(stage, j - 1, op):
-                    mdl += S[(stage, j, op)] >= E[(stage, j - 1, op)] + T_comm
-
-    # Inter-stage forward dependencies
-    for stage in range(2, p + 1):
-        # student forward flow for current batch
-        for mb in range(1, m + 1):
-            mdl += S[(stage, mb, 'F_S')] >= E[(stage - 1, mb, 'F_S')] + T_comm
-        # teacher forward flow for next iteration (guarded)
-        for mb in range(m + 1, m + times + 1):
-            if has(stage - 1, mb, 'F_T') and has(stage, mb, 'F_T'):
-                mdl += S[(stage, mb, 'F_T')] >= E[(stage - 1, mb, 'F_T')] + T_comm
-
-    # Backward dependency (current batch)
-    for stage in range(1, p):
-        for mb in range(1, m + 1):
-            mdl += S[(stage, mb, 'B')] >= E[(stage + 1, mb, 'B')] + T_comm
-
-    # ------------------------ Same-stage non-overlap (big-M) ----
-    M = 1e5
-    y = {}  # precedence binaries keyed by unordered pair of tasks
-
-    def precedes(a, b, ydict):
-        """Return expression that equals 1 when a precedes b, else equals binary/1-binary."""
-        if a == b:
-            return 1
-        if (a, b) in ydict:
-            return ydict[(a, b)]
-        elif (b, a) in ydict:
-            return 1 - ydict[(b, a)]
-        else:
-            raise RuntimeError(f"Missing precedence variable for {a} and {b}")
-
-    # create pairwise binaries and add disjunctions using end-time form (as in schedule_ts)
-    for stage in range(1, p + 1):
-        tasks_on_stage = [task for task in T.keys() if task[0] == stage]
-        for i, a in enumerate(tasks_on_stage):
-            for j, b in enumerate(tasks_on_stage):
-                if i >= j:
-                    continue
-                if (a, b) not in y and (b, a) not in y:
-                    y[(a, b)] = pulp.LpVariable(f"y_{a}_{b}", lowBound=0, upBound=1, cat="Binary")
-                    # disjunctive constraints using E (end times) and durations from T
-                    mdl += E[a] >= E[b] + T[a] - M * precedes(a, b, y)
-                    mdl += E[b] >= E[a] + T[b] - M * precedes(b, a, y)
-
-    # ------------------------ Memory capacity -------------------
-    if delta_mem is None:
-        delta_mem = {'F_S': M_B, 'F_T': 0, 'B': M_W - M_B, 'W': -M_W}
-
-    for stage in range(1, p + 1):
-        tasks_stage = [t for t in T.keys() if t[0] == stage]
-        for b in tasks_stage:
-            # enforce capacity at completion instant E[b] by summing deltas for all tasks a that precede b
-            mem_prefix_terms = []
-            for a in tasks_stage:
-                mem_prefix_terms.append(delta_mem[a[2]] * precedes(a, b, y))
-            mdl += pulp.lpSum(mem_prefix_terms) <= gpu_mem_limit
-
-    # ------------------------ Solve & Report --------------------
-    mdl.solve(pulp.PULP_CBC_CMD(msg=msg, timeLimit=time_limit))
-    print("Status:", pulp.LpStatus[mdl.status])
-    print("Objective (Z):", pulp.value(Z))
-
-    return mdl, Z, S, E, T, y
-
-
 
 def schedule_ts(p=3, m=3, T_comm=0.0, gpu_mem_limit=100, delta_mem=None, time_limit=60*10, msg=0):
     alpha = 1.5
@@ -451,7 +291,7 @@ def analyze_bubble_vs_gpu_limit(p, m, T_comm, M_B, M_W, delta_mem, time_limit=60
 
 
 if __name__ == "__main__":
-    p = 3                   # @param GPUs
+    p = 2                   # @param GPUs
     m = 2*p                  # @param microbatches
     T_comm = 0.0            # @param inter-stage communication time
     M_B, M_W = 25, 10       # @param Memory usage for B and W operations in GB
@@ -459,7 +299,6 @@ if __name__ == "__main__":
     delta_mem = {'F_S': M_B, 'F_T':0, 'B': M_W - M_B, 'W': -M_W}
     
     # special
-    # mdl, Z, S, E, T, y = special(p=p, m=m, T_comm=T_comm, gpu_mem_limit=gpu_mem_limit, delta_mem=delta_mem, times=2, time_limit=60*10, msg=1)
     mdl, Z, S, E, T, y = schedule_ts(p=p, m=m, T_comm=T_comm, gpu_mem_limit=gpu_mem_limit, delta_mem=delta_mem, time_limit=60*10, msg=1)
     
     

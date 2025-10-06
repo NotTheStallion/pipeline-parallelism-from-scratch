@@ -8,9 +8,9 @@ p = 3                    # GPUs / stages
 m = 2                    # microbatches per batch (current batch)
 T_comm = 0.0             # inter-stage comm time
 M_B, M_W = 25, 10        # memory deltas (GB)
-gpu_mem_limit = (p-1) * M_B - 1  # GPU memory limit (GB)
+gpu_mem_limit = (p-1) * M_B  # GPU memory limit (GB)
 
-times = 2  # number of microbatches of the "next iteration" we model for teacher forwards
+extra_teach_f = 2  # number of microbatches of the "next iteration" we model for teacher forwards
 
 # ------------------------ Tasks -----------------------------
 # T[(stage, mb, op)] = duration
@@ -24,7 +24,7 @@ for stage in range(1, p + 1):
 
 # Next iteration: only teacher forwards (no B/W for next iteration in this model)
 for stage in range(1, p + 1):
-    for mb in range(m + 1, m + times + 1):
+    for mb in range(m + 1, m + extra_teach_f + 1):
         T[(stage, mb, 'F_T')] = 1
 
 def has(stage, mb, op):
@@ -49,8 +49,8 @@ for stage in range(1, p + 1):
     W1 = pulp.LpVariable(f"last_end_stage{stage}", lowBound=0)
     mdl += W1 >= E[(stage, m, 'W')]              # last W of the current batch
     # last teacher forward present is at mb = m + times
-    if has(stage, m + times, 'F_T'):
-        mdl += W1 >= E[(stage, m + times, 'F_T')]
+    if has(stage, m + extra_teach_f, 'F_T'):
+        mdl += W1 >= E[(stage, m + extra_teach_f, 'F_T')]
 
     mdl += Z >= W1 - W0
 
@@ -70,7 +70,7 @@ for stage in range(1, p + 1):
 # Microbatch order per op on each stage
 for stage in range(1, p + 1):
     # F_T must be ordered across its domain (next iteration microbatches)
-    for j in range(m + 2, m + times + 1):
+    for j in range(m + 2, m + extra_teach_f + 1):
         if has(stage, j, 'F_T') and has(stage, j - 1, 'F_T'):
             mdl += S[(stage, j, 'F_T')] >= E[(stage, j - 1, 'F_T')] + T_comm
 
@@ -86,7 +86,7 @@ for stage in range(2, p + 1):
     for mb in range(1, m + 1):
         mdl += S[(stage, mb, 'F_S')] >= E[(stage - 1, mb, 'F_S')] + T_comm
     # F_T flows only for next-iteration microbatches (guarded)
-    for mb in range(m + 1, m + times + 1):
+    for mb in range(m + 1, m + extra_teach_f + 1):
         if has(stage - 1, mb, 'F_T') and has(stage, mb, 'F_T'):
             mdl += S[(stage, mb, 'F_T')] >= E[(stage - 1, mb, 'F_T')] + T_comm
 

@@ -4,14 +4,14 @@ import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 
 # ------------------------ Parameters ------------------------
-p = 3                    # GPUs / stages
-m = 2                    # microbatches per batch
+p = 4                    # GPUs / stages
+m = p-1                 # microbatches per batch
 T_comm = 0.0             # inter-stage comm time
 M_B, M_W = 25, 10        # memory deltas (GB)
 gpu_mem_limit = p*M_B  # GPU memory limit (GB)
-alpha = 1.5
+alpha = 1
 
-times = 2
+extra_teach_f = 0
 
 # ------------------------ Tasks -----------------------------
 # T[(stage, mb, op)] = duration
@@ -19,13 +19,12 @@ T = {}
 for stage in range(1, p+1):
     for mb in range(1, m+1):
         T[(stage, mb, 'F_S')] = 1
-        # T[(stage, mb, 'F_T')] = 1
         T[(stage, mb, 'B')]   = 1
         T[(stage, mb, 'W')]   = 1
 
 # Next batch: teacher forwards only
 for stage in range(1, p+1):
-    for mb in range(1, times+m+1):
+    for mb in range(1, extra_teach_f+m+1):
         T[(stage, mb, 'F_T')] = alpha * T[(1, 1, 'F_S')]
 
 def has(stage, mb, op):
@@ -48,7 +47,7 @@ for stage in range(1, p+1):
     # max W_m and F_T_2m
     W1 = pulp.LpVariable(f"W1_{stage}", lowBound=0)
     mdl += W1 >= E[(stage, m, 'W')]
-    mdl += W1 >= E[(stage, times+m, 'F_T')]
+    mdl += W1 >= E[(stage, extra_teach_f+m, 'F_T')]
     # last W of first batch is at mb = m
     mdl += Z >= W1 - W0
 mdl += Z
@@ -68,7 +67,7 @@ for stage in range(1, p+1):
 # Microbatch order per op on each stage
 for stage in range(1, p+1):
     # F_T must be ordered across 1..2m (when both exist)
-    for j in range(2, times+m+1):
+    for j in range(2, extra_teach_f+m+1):
         if has(stage, j, 'F_T') and has(stage, j-1, 'F_T'):
             mdl += S[(stage, j, 'F_T')] >= E[(stage, j-1, 'F_T')] + T_comm
     # F_S, B, W are only for first batch (1..m)
@@ -82,7 +81,7 @@ for stage in range(2, p+1):
     for mb in range(1, m+1):
         mdl += S[(stage, mb, 'F_S')] >= E[(stage-1, mb, 'F_S')] + T_comm
     # F_T flows for both batches (guard existence)
-    for mb in range(1, times+m+1):
+    for mb in range(1, extra_teach_f+m+1):
         if has(stage-1, mb, 'F_T') and has(stage, mb, 'F_T'):
             mdl += S[(stage, mb, 'F_T')] >= E[(stage-1, mb, 'F_T')] + T_comm
 
