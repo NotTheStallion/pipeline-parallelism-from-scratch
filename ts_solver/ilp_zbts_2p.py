@@ -229,8 +229,7 @@ def analyze_bubble_vs_gpu_limit(p, m, T_comm, M_B, M_W, delta_mem, time_limit=60
     tspipe_ms = []
 
     for gpu_mem_limit in gpu_limits:
-        mdl, Z, S, E, T, y = special(p=p, m=m, T_comm=T_comm, gpu_mem_limit=gpu_mem_limit, delta_mem=delta_mem, times=2, time_limit=time_limit, msg=0)
-        # mdl, Z, S, E, T, y = schedule_ts(p=p, m=m, T_comm=T_comm, gpu_mem_limit=gpu_mem_limit, delta_mem=delta_mem, time_limit=time_limit)
+        mdl, Z, S, E, T, y = schedule_ts(p=p, m=m, T_comm=T_comm, gpu_mem_limit=gpu_mem_limit, delta_mem=delta_mem, time_limit=time_limit)
         
         if gpu_mem_limit > m*M_B:
             tspipe_br.append(tspipe_bubble_ratio)
