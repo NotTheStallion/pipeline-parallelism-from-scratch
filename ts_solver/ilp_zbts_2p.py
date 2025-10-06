@@ -22,9 +22,7 @@ import pulp
 from collections import defaultdict
 
 
-def schedule_ts(p=3, m=3, T_comm=0.0, gpu_mem_limit=100, delta_mem=None, time_limit=60*10, msg=0):
-    alpha = 1.5
-    
+def schedule_ts(p=3, m=3, alpha=1, T_comm=0.0, gpu_mem_limit=100, delta_mem=None, time_limit=60*10, msg=0):
     T = {}
     for stage in range(1, p+1):
         for mb in range(1, m+1):
@@ -40,9 +38,6 @@ def schedule_ts(p=3, m=3, T_comm=0.0, gpu_mem_limit=100, delta_mem=None, time_li
 
     # Objective
     Z = pulp.LpVariable("Z", lowBound=0)
-    # for stage in range(1, p+1):
-    #     mdl += Z >= E[(stage, m, 'W')] - min(S[(stage, 1, 'F_S')], S[(stage, 1, 'F_T')])
-    # mdl += Z
 
 
     for stage in range(1, p + 1):
@@ -102,8 +97,6 @@ def schedule_ts(p=3, m=3, T_comm=0.0, gpu_mem_limit=100, delta_mem=None, time_li
 
 
     # Memory limit constraint
-
-
     for stage in range(1, p+1):
         tasks_stage = [t for t in T.keys() if t[0] == stage]
 
@@ -115,9 +108,6 @@ def schedule_ts(p=3, m=3, T_comm=0.0, gpu_mem_limit=100, delta_mem=None, time_li
                 mem_prefix_terms.append(delta_mem[a[2]] * precedes(a, b, y))
 
             mdl += pulp.lpSum(mem_prefix_terms) <= gpu_mem_limit
-
-
-
 
 
     mdl.solve(pulp.PULP_CBC_CMD(msg=msg, timeLimit=time_limit))
@@ -158,9 +148,6 @@ def bubble_info(mdl, Z, S, E, T, y, p):
         total_bubble_size += bubble_sizes[stage]
     
     return total_bubble_size, bubble_sizes, schedule, total_time
-
-
-
 
 
 
@@ -218,7 +205,7 @@ def plot_schedule(mdl, Z, S, E, T, y, p, m, delta_mem, schedule):
 
 
 
-def analyze_bubble_vs_gpu_limit(p, m, T_comm, M_B, M_W, delta_mem, time_limit=60*10):
+def analyze_bubble_vs_gpu_limit(p, m, alpha, T_comm, M_B, M_W, delta_mem, time_limit=60*10):
     gpu_limits = range(M_B, int(2 * p * M_B + 50), 5)
     bubble_ratios = []
     total_times = []
@@ -229,7 +216,7 @@ def analyze_bubble_vs_gpu_limit(p, m, T_comm, M_B, M_W, delta_mem, time_limit=60
     tspipe_ms = []
 
     for gpu_mem_limit in gpu_limits:
-        mdl, Z, S, E, T, y = schedule_ts(p=p, m=m, T_comm=T_comm, gpu_mem_limit=gpu_mem_limit, delta_mem=delta_mem, time_limit=time_limit)
+        mdl, Z, S, E, T, y = schedule_ts(p=p, m=m, alpha=alpha, T_comm=T_comm, gpu_mem_limit=gpu_mem_limit, delta_mem=delta_mem, time_limit=time_limit)
         
         if gpu_mem_limit > m*M_B:
             tspipe_br.append(tspipe_bubble_ratio)
@@ -290,27 +277,18 @@ def analyze_bubble_vs_gpu_limit(p, m, T_comm, M_B, M_W, delta_mem, time_limit=60
 
 
 if __name__ == "__main__":
-    p = 2                   # @param GPUs
-    m = 2*p                  # @param microbatches
+    p = 4                   # @param GPUs
+    m = 2*p                 # @param microbatches
     T_comm = 0.0            # @param inter-stage communication time
     M_B, M_W = 25, 10       # @param Memory usage for B and W operations in GB
     gpu_mem_limit = m*M_B   # @param GPU memory limit in GB
+    alpha = 1.5             # @param Teacher forward time factor
     delta_mem = {'F_S': M_B, 'F_T':0, 'B': M_W - M_B, 'W': -M_W}
     
     # special
-    mdl, Z, S, E, T, y = schedule_ts(p=p, m=m, T_comm=T_comm, gpu_mem_limit=gpu_mem_limit, delta_mem=delta_mem, time_limit=60*10, msg=1)
-    
+    mdl, Z, S, E, T, y = schedule_ts(p=p, m=m, alpha=alpha, T_comm=T_comm, gpu_mem_limit=gpu_mem_limit, delta_mem=delta_mem, time_limit=60*10, msg=1)
     
     tot_bubble_size, bubble_sizes, schedule, total_time = bubble_info(mdl, Z, S, E, T, y, p)
-    
-    # schedule = defaultdict(list)
-    # for task in sorted(T.keys()):
-    #     # task = (stage, mb, op)
-    #     s = float(pulp.value(S[task]))
-    #     e = float(pulp.value(E[task]))
-    #     schedule[task[0]].append((s, e, task[1], task[2]))
-
-    # print(schedule[1])
     
     plot_schedule(mdl, Z, S, E, T, y, p, m, delta_mem, schedule)
     
