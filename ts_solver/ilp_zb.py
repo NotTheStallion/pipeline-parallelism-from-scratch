@@ -3,22 +3,11 @@ import pulp
 import os
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
+import sys
 
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-
-def precedes(a, b, y):
-    # Check if task a precedes task b
-    
-    if a == b:
-        return 1
-    
-    if (a, b) in y:
-        return y[(a, b)]
-    elif (b, a) in y:
-        return 1 - y[(b, a)]
-    else:
-        raise ValueError(f"No precedence relation defined for {a} and {b}")
-        
+from src.utils import precedes
 
 
 
