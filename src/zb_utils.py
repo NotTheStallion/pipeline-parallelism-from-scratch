@@ -1,6 +1,6 @@
 """
 Utility functions for decoupled backward passes, based on Zero-Bubble.
-This file is Owned by Adrien Aguila and does not belong to me.
+This file is Owned by Adrien Aguila.
 """
 
 import torch

@@ -12,20 +12,17 @@ replace_linear_with_linear_dw(model, device='cpu')
 
 
 
-# First check
 linear_dw_layer = model[1]
 print(f"Using layer: {linear_dw_layer}")
 
-# Toy input
-inputs = [torch.randn(3, 10, requires_grad=True),  # Microbatch 1
-          torch.randn(3, 10, requires_grad=True)]   # Microbatch 2
 
-# forward passes for both microbatches
-print("\n--- FORWARD PASS ---")
+inputs = [torch.randn(3, 10, requires_grad=True),
+          torch.randn(3, 10, requires_grad=True)]
+
+
 
 outputs = []
 for mb_id, x in enumerate(inputs):
-    print(f"Forwarding microbatch {mb_id}")
     out = model(x)
     outputs.append(out)
     
@@ -34,8 +31,7 @@ for mb_id, x in enumerate(inputs):
 
 
 
-print("\n--- BACKWARD PASS (dX) ---")
-# Compute MSE loss
+
 fake_targets = [torch.zeros_like(o) for o in outputs]
 mse_loss = nn.MSELoss()
 
@@ -46,7 +42,6 @@ for out, target in zip(outputs, fake_targets):
 
 
 for mb_id, (out, fake_grad) in enumerate(zip(outputs, fake_grads_from_top)):
-    print(f"Computing dX for microbatch {mb_id}")
     # This backward() call propagates the gradient backwards.
     # It will trigger LinearDX.backward, which computes dX and
     # saves fake_grad as linear_dw_layer.last_grad_output.
@@ -55,20 +50,18 @@ for mb_id, (out, fake_grad) in enumerate(zip(outputs, fake_grads_from_top)):
     linear_dw_layer.move_last_computed("grad_output", mb_id)
     # After this, input[mb_id].grad will be populated.
 
-print(f"Gradient of input 0: {inputs[0].grad is not None}") # True
-print(f"Gradient of input 1: {inputs[1].grad is not None}") # True
+assert inputs[0].grad is not None, "Gradient of input 0 should not be None"
+assert inputs[1].grad is not None, "Gradient of input 1 should not be None"
 # @Note: linear_dw_layer.weight.grad is still None
-print(f"Gradient of weights: {linear_dw_layer.weight.grad is not None}") # False
-print(f"Gradient of bias: {linear_dw_layer.bias.grad is not None}")     # False
+assert linear_dw_layer.weight.grad is None, "Gradient of weights should be None"
+assert linear_dw_layer.bias.grad is None, "Gradient of bias should be None"
 
 
-print("\n--- WEIGHT GRADIENT COMPUTATION (dW) ---")
 for mb_id in range(len(inputs)):
-    print(f"Computing dW from microbatch {mb_id}")
     # This is the key function that uses the saved .ctx["input"] and .ctx["grad_output"]
     # to compute dW and dB and accumulate them into linear_dw_layer.weight.grad and .bias.grad.
     linear_dw_layer.backward(mb_id)
 
-print(f"Gradient of weights: {linear_dw_layer.weight.grad is not None}") # True
-print(f"Gradient of bias: {linear_dw_layer.bias.grad is not None}")     # True
-print(f"Shape of dW: {linear_dw_layer.weight.grad.shape}") # Should be (5, 10)
+assert linear_dw_layer.weight.grad is not None, "Gradient of weights should not be None"
+assert linear_dw_layer.bias.grad is not None, "Gradient of bias should not be None"
+assert linear_dw_layer.weight.grad.shape == (5, 10), f"Shape of dW should be (5, 10), got {linear_dw_layer.weight.grad.shape}"
