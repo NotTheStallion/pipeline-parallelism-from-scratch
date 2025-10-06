@@ -4,13 +4,6 @@ from collections import defaultdict
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 
-# p = 4
-# m = p-1
-# M = 20
-# M_B, M_W = 25, 10       # Memory usage for B and W operations in GB
-# M_BBatch, M_WBatch = 50, 20
-# T_total = 10
-# alpha = 2
 
 
 def zbts_p_1(p=4, m=3, M_BBatch=50, M_WBatch=20, T_total=10, alpha=1):
@@ -234,14 +227,6 @@ def plot_schedule_and_memory(S, T, schedule, makespan, delta_mem, p, m, T_total,
     # --- Figure 2: Only Schedule (Gantt chart) ---
     fig2, ax_sched = plt.subplots(figsize=(14, 4))
 
-
-
-    # first_start = min(
-    #     s for stage in range(1, p + 1) for s, _, _, op in schedule[stage] if op == 'F_S'
-    # )
-    # last_end = max(e for stage in range(1, p + 1) for _, e, _, _ in schedule[stage])
-
-    # print(first_start, last_end)
 
     # makespan = last_end - first_start
     ops = ['F_S', 'F_T', 'B', 'W']
