@@ -1,6 +1,6 @@
 import torch
 import torch.nn as nn
-from zb_utils import LayerDW, replace_linear_with_linear_dw, LinearDX
+from src.zb_utils import LayerDW, replace_linear_with_linear_dw, LinearDX
 
 
 model = nn.Sequential(
