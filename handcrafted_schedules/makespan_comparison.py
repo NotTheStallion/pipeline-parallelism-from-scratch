@@ -28,9 +28,9 @@ for alpha in alpha_values:
     
 
 
-plt.plot(alpha_values, tspipe_makespans, label='TSPipe', marker='o')
-plt.plot(alpha_values, zbts_p_1_makespans, label='ZBTS p-1', marker='o')
-plt.plot(alpha_values, zbts_2p_makespans, label='ZBTS 2p', marker='o')
+plt.plot(alpha_values, tspipe_makespans, label='TSPipe')
+plt.plot(alpha_values, zbts_p_1_makespans, label='ZBTS p-1')
+plt.plot(alpha_values, zbts_2p_makespans, label='ZBTS 2p')
 plt.xlabel('Alpha (Teacher Forward Time Multiplier)')
 plt.ylabel('Makespan')
 plt.title(f'Makespan vs Alpha (p={p}, m=p-1 for TSPipe and ZBTS p-1, m=2p for ZBTS 2p)')
