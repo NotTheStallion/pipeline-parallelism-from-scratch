@@ -116,14 +116,14 @@ for stage in range(1, p+1):
         # capacity at every completion instant E[b]
         mdl += pulp.lpSum(delta_mem[a[2]] * precedes(a, b, y) for a in tasks_stage) <= gpu_mem_limit
 
-mdl.solve(pulp.PULP_CBC_CMD(msg=1, timeLimit=60*60*4))
+mdl.solve(pulp.PULP_CBC_CMD(msg=1, timeLimit=60*60*4)) # type: ignore
 print("Status:", pulp.LpStatus[mdl.status])
 print("Objective (Z):", pulp.value(Z))
 
 schedule = defaultdict(list)
 for task in sorted(T):
-    s = float(pulp.value(S[task]))
-    e = float(pulp.value(E[task]))
+    s = float(pulp.value(S[task])) # type: ignore
+    e = float(pulp.value(E[task])) # type: ignore
     schedule[task[0]].append((s, e, task[1], task[2]))
 
 plot_memory_and_schedule(schedule, T, delta_mem, p, m, filename_prefix="zbts_p-1_ilp")

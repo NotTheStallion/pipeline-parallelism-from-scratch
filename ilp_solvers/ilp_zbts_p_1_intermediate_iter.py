@@ -105,14 +105,14 @@ for stage in range(1, p + 1):
 
 
 
-mdl.solve(pulp.PULP_CBC_CMD(msg=1, timeLimit=60*10))
+mdl.solve(pulp.PULP_CBC_CMD(msg=1, timeLimit=60*10)) # type: ignore
 print("Status:", pulp.LpStatus[mdl.status])
 print("Objective (Z):", pulp.value(Z))
 
 schedule = defaultdict(list)
 for task in sorted(T):
-    s = float(pulp.value(S[task]))
-    e = float(pulp.value(E[task]))
+    s = float(pulp.value(S[task])) # type: ignore
+    e = float(pulp.value(E[task])) # type: ignore
     schedule[task[0]].append((s, e, task[1], task[2]))
 
 
