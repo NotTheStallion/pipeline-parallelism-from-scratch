@@ -44,7 +44,7 @@ for stage in range(1, p+1):
     # earliest of F_S1 and F_T1 (first-batch only)
     W0 = pulp.LpVariable(f"W_{stage}", lowBound=0)
     mdl += W0 <= S[(stage, 1, 'F_S')]
-    mdl += W0 <= S[(stage, 3, 'F_T')]
+    mdl += W0 <= S[(stage, p, 'F_T')]
     
     
     # max W_m and F_T_2m
